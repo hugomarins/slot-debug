@@ -10,7 +10,7 @@
 		"minor": 1,
 		"patch": 1
 	},
-	"description": "Debugging tool for slot functionality",
+	"description": "Inspect slots/properties of tag rem / tables and force-delete ghost slots and their spurios flashcards.",
 	"requestNative": false,
 	"requiredScopes": [
 		{
