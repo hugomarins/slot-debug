@@ -502,17 +502,8 @@ video {
   --tw-contain-paint:  ;
   --tw-contain-style:  ;
 }
-.absolute {
-  position: absolute;
-}
-.relative {
-  position: relative;
-}
 .flex {
   display: flex;
-}
-.hidden {
-  display: none;
 }
 .max-h-\[80vh\] {
   max-height: 80vh;
