@@ -1,0 +1,21 @@
+{
+	"manifestVersion": 1,
+	"id": "slot_debug",
+	"name": "Slot Debug",
+	"author": "hugomarins",
+	"repoUrl": "https://github.com/hugomarins/slot-debug",
+	"enableOnMobile": true,
+	"version": {
+		"major": 0,
+		"minor": 1,
+		"patch": 1
+	},
+	"description": "Debugging tool for slot functionality",
+	"requestNative": false,
+	"requiredScopes": [
+		{
+			"type": "All",
+			"level": "ReadCreateModifyDelete"
+		}
+	]
+}
