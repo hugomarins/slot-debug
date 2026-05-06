@@ -22,6 +22,8 @@ interface TagData {
   taggedCount: number;
   slots: SlotInfo[];
   nonPropertyChildCount: number;
+  emptyFrontInstanceCount: number;
+  emptyFrontRemIds: string[];
 }
 
 const preStyle: React.CSSProperties = {
@@ -55,6 +57,8 @@ function TagDebug() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleted, setDeleted] = useState<Record<string, number>>({});
+  const [deletingEmpties, setDeletingEmpties] = useState(false);
+  const [deletedEmpties, setDeletedEmpties] = useState<number | null>(null);
 
   const ctx = useRunAsync(
     async () => plugin.widget.getWidgetContext<WidgetLocation.Popup>(),
@@ -106,7 +110,25 @@ function TagDebug() {
       nonPropertyChildCount++;
     }
 
-    return { name, id: remId, taggedCount: taggedRems.length, slots, nonPropertyChildCount };
+    // Scan all tagged rems in parallel for orphaned child rems:
+    // empty front AND non-empty back, which distinguishes deleted property-value
+    // rems (their reference was removed but back content remains) from intentional
+    // spacer rems (truly empty on both sides).
+    const emptyFrontChecks = await Promise.all(
+      taggedRems.map(async (r) => {
+        const ch = await r.getChildrenRem();
+        return ch
+          .filter(c =>
+            richTextToString(c.text || []).trim() === '' &&
+            richTextToString((c as any).backText || []).trim() !== ''
+          )
+          .map(c => c._id);
+      })
+    );
+    const emptyFrontRemIds = emptyFrontChecks.flat();
+    const emptyFrontInstanceCount = emptyFrontChecks.filter(ids => ids.length > 0).length;
+
+    return { name, id: remId, taggedCount: taggedRems.length, slots, nonPropertyChildCount, emptyFrontInstanceCount, emptyFrontRemIds };
   }, [remId, refreshKey]);
 
   const handleForceDelete = async (slot: SlotInfo) => {
@@ -181,6 +203,40 @@ function TagDebug() {
     setDeleting(null);
   };
 
+  const handleDeleteEmptyFronts = async () => {
+    if (!data) return;
+    const confirmed = window.confirm(
+      `⚠️ DANGER — Delete Empty-Front Children\n\n` +
+      `Found: ${data.emptyFrontRemIds.length} empty-front rem(s)\n` +
+      `Across: ${data.emptyFrontInstanceCount} tagged instance(s)\n\n` +
+      `This will permanently remove those rems.\n\n` +
+      `MAKE A BACKUP FIRST. This is IRREVERSIBLE.\n\nProceed?`
+    );
+    if (!confirmed) return;
+
+    console.log(`[TagDebug] Deleting ${data.emptyFrontRemIds.length} empty-front rems…`);
+    setDeletingEmpties(true);
+    let count = 0;
+    for (const id of data.emptyFrontRemIds) {
+      const rem = await plugin.rem.findOne(id);
+      if (rem) {
+        try {
+          await rem.remove();
+          count++;
+          console.log(`[TagDebug] Deleted empty-front rem ${id} (${count}/${data.emptyFrontRemIds.length})`);
+        } catch (e) {
+          console.error(`[TagDebug] Failed to delete empty-front rem ${id}:`, e);
+        }
+      }
+    }
+    const msg = `Deleted ${count} empty-front rem(s) across ${data.emptyFrontInstanceCount} instance(s).`;
+    console.log('[TagDebug]', msg);
+    await plugin.app.toast(msg);
+    setDeletedEmpties(count);
+    setDeletingEmpties(false);
+    setRefreshKey((k) => k + 1);
+  };
+
   if (!remId) {
     return (
       <div style={{ padding: 16, fontSize: 13, color: 'var(--rn-clr-content-primary)' }}>
@@ -220,6 +276,39 @@ function TagDebug() {
         {data.nonPropertyChildCount > 0 && (
           <div style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)', marginTop: 2 }}>
             + {data.nonPropertyChildCount} non-property children hidden (rows / nested rems)
+          </div>
+        )}
+        {data.emptyFrontInstanceCount > 0 && (
+          <div style={{ marginTop: 10, padding: '8px 10px', backgroundColor: 'var(--rn-clr-background-secondary)', borderRadius: 5, border: '1px solid #b45309' }}>
+            <div style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600, marginBottom: 6 }}>
+              ⚠️ {data.emptyFrontRemIds.length} orphaned rem(s) found in {data.emptyFrontInstanceCount} instance(s)
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)', marginBottom: 6 }}>
+              Empty front + non-empty back (deleted property-value rems)
+            </div>
+            {deletedEmpties !== null ? (
+              <div style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
+                ✓ Deleted — {deletedEmpties} empty-front rem(s) removed.
+              </div>
+            ) : (
+              <button
+                disabled={deletingEmpties}
+                onClick={handleDeleteEmptyFronts}
+                style={{
+                  padding: '3px 10px',
+                  backgroundColor: '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: deletingEmpties ? 'default' : 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  opacity: deletingEmpties ? 0.6 : 1,
+                }}
+              >
+                {deletingEmpties ? 'Deleting…' : `Delete ${data.emptyFrontRemIds.length} Empty-Front Rem(s)`}
+              </button>
+            )}
           </div>
         )}
       </div>
