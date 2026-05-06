@@ -2,7 +2,7 @@
 
 A surgical debug tool for RemNote tag slots/properties. Use it to inspect the slots of a tag rem, identify ghost slots whose deletion failed (but which keep generating flashcards), and force-delete them along with all their property-value child rems in tagged rems.
 
-<img src"https://raw.githubusercontent.com/hugomarins/slot-debug/refs/heads/main/image/debugger-widget.png" width="500">
+![./image/debugger-widget.png](https://raw.githubusercontent.com/hugomarins/slot-debug/refs/heads/main/image/debugger-widget.png)
 
 ## The problem it solves
 
