@@ -14,6 +14,10 @@ async function onActivate(plugin: ReactRNPlugin) {
 		dimensions: { width: '500px', height: 900 },
 	});
 
+	plugin.app.registerWidget('orphaned_rems', WidgetLocation.Popup, {
+		dimensions: { width: '860px', height: 700 },
+	});
+
 	await plugin.app.registerCommand({
 		id: 'debug-tag-slots',
 		name: 'Debug Tag Slots',
