@@ -505,14 +505,8 @@ video {
 .flex {
   display: flex;
 }
-.max-h-\[80vh\] {
-  max-height: 80vh;
-}
-.w-full {
-  width: 100%;
-}
-.overflow-y-auto {
-  overflow-y: auto;
+.hidden {
+  display: none;
 }
 .break-all {
   word-break: break-all;
@@ -520,15 +514,11 @@ video {
 .border {
   border-width: 1px;
 }
-.p-4 {
-  padding: 1rem;
-}
-.text-sm {
-  font-size: 0.875rem;
-  line-height: 1.25rem;
-}
 .uppercase {
   text-transform: uppercase;
+}
+.filter {
+  filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
 }
 /**
 Copy tailwind preflight. Could we do this automatically?

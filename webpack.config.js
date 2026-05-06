@@ -125,6 +125,7 @@ if (isProd) {
 		hot: true,
 		compress: true,
 		watchFiles: ["src/*"],
+		static: { directory: path.join(__dirname, "public") },
 		headers: {
 			"Access-Control-Allow-Origin": "*",
 		},

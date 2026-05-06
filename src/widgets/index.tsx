@@ -14,7 +14,7 @@ async function onActivate(plugin: ReactRNPlugin) {
 		id: 'debug-tag-slots',
 		name: 'Debug Tag Slots',
 		description: 'Inspect slots/properties of the focused tag rem and force-delete ghost slots.',
-		quickCode: 'tsd',
+		quickCode: 'dts',
 		action: async () => {
 			const rem = await plugin.focus.getFocusedRem();
 			if (!rem) {

@@ -99,37 +99,64 @@ function TagDebug() {
       `  2. Remove its property-value rem from every tagged rem\n\n` +
       `MAKE A BACKUP FIRST. This is IRREVERSIBLE.\n\nProceed?`
     );
-    if (!confirmed) return;
+    if (!confirmed) {
+      console.log(`[TagDebug] Force delete cancelled by user for slot "${slot.name}" (${slot.id})`);
+      return;
+    }
 
+    console.log(`[TagDebug] Force delete started for slot "${slot.name}" (${slot.id})`);
     setDeleting(slot.id);
     try {
       const tagRem = await plugin.rem.findOne(remId!);
       if (!tagRem) {
-        await plugin.app.toast('Tag rem not found.');
+        const msg = 'Tag rem not found.';
+        console.error('[TagDebug]', msg, 'remId:', remId);
+        await plugin.app.toast(msg);
         setDeleting(null);
         return;
       }
+      console.log(`[TagDebug] Tag rem found: "${richTextToString(tagRem.text || [])}" (${tagRem._id})`);
 
+      console.log('[TagDebug] Fetching tagged rems…');
       const taggedRems = await tagRem.taggedRem();
+      console.log(`[TagDebug] Found ${taggedRems.length} tagged rems. Resolving property-value rems for slot…`);
+
       const valueRems = await Promise.all(taggedRems.map((r) => r.getTagPropertyAsRem(slot.id)));
+      const presentValues = valueRems.filter(Boolean);
+      console.log(`[TagDebug] ${presentValues.length} of ${taggedRems.length} tagged rems have a value for this slot.`);
 
       let deletedCount = 0;
       for (const v of valueRems) {
         if (v) {
-          try { await v.remove(); deletedCount++; }
-          catch (e) { console.error('[TagDebug] remove failed:', v._id, e); }
+          try {
+            await v.remove();
+            deletedCount++;
+            console.log(`[TagDebug] Deleted property-value rem ${v._id} (${deletedCount}/${presentValues.length})`);
+          } catch (e) {
+            console.error(`[TagDebug] Failed to delete property-value rem ${v._id}:`, e);
+          }
         }
       }
+      console.log(`[TagDebug] Property-value deletion done. ${deletedCount} removed.`);
 
+      console.log(`[TagDebug] Deleting slot rem itself (${slot.id})…`);
       const slotRem = await plugin.rem.findOne(slot.id);
-      if (slotRem) await slotRem.remove();
+      if (slotRem) {
+        await slotRem.remove();
+        console.log(`[TagDebug] Slot rem deleted.`);
+      } else {
+        console.warn(`[TagDebug] Slot rem (${slot.id}) not found — may have already been deleted.`);
+      }
 
-      await plugin.app.toast(`Deleted slot "${slot.name}" + ${deletedCount} property-value rem(s).`);
+      const msg = `Deleted slot "${slot.name}" + ${deletedCount} property-value rem(s).`;
+      console.log('[TagDebug]', msg);
+      await plugin.app.toast(msg);
       setDeleted((prev) => ({ ...prev, [slot.id]: deletedCount }));
       setRefreshKey((k) => k + 1);
     } catch (e) {
-      console.error('[TagDebug] Force delete failed:', e);
-      await plugin.app.toast('Force delete failed — check browser console.');
+      const msg = 'Force delete failed — check browser console.';
+      console.error('[TagDebug]', msg, e);
+      await plugin.app.toast(msg);
     }
     setDeleting(null);
   };
@@ -207,25 +234,50 @@ function TagDebug() {
               </div>
             )}
 
-            <button
-              disabled={!!deleting || deleted[slot.id] !== undefined}
-              onClick={() => handleForceDelete(slot)}
-              style={{
-                padding: '3px 10px',
-                backgroundColor: deleted[slot.id] !== undefined ? '#374151' : '#dc2626',
-                color: 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: (deleting || deleted[slot.id] !== undefined) ? 'default' : 'pointer',
-                fontSize: 12,
-                fontWeight: 600,
-                opacity: deleting === slot.id ? 0.6 : 1,
-              }}
-            >
-              {deleting === slot.id ? 'Deleting…'
-                : deleted[slot.id] !== undefined ? `Deleted (${deleted[slot.id]} removed)`
-                : `Force Delete`}
-            </button>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button
+                disabled={!!deleting || deleted[slot.id] !== undefined}
+                onClick={() => handleForceDelete(slot)}
+                style={{
+                  padding: '3px 10px',
+                  backgroundColor: deleted[slot.id] !== undefined ? '#374151' : '#dc2626',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: (deleting || deleted[slot.id] !== undefined) ? 'default' : 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  opacity: deleting === slot.id ? 0.6 : 1,
+                }}
+              >
+                {deleting === slot.id ? 'Deleting…'
+                  : deleted[slot.id] !== undefined ? `Deleted (${deleted[slot.id]} removed)`
+                  : `Force Delete`}
+              </button>
+
+              <button
+                onClick={async () => {
+                  const rem = await plugin.rem.findOne(slot.id);
+                  if (!rem) {
+                    await plugin.app.toast(`Rem not found: ${slot.id}`);
+                    return;
+                  }
+                  await plugin.window.openRem(rem);
+                }}
+                style={{
+                  padding: '3px 10px',
+                  backgroundColor: 'transparent',
+                  color: 'var(--rn-clr-content-primary)',
+                  border: '1px solid var(--rn-clr-background-tertiary)',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Open Property Rem
+              </button>
+            </div>
           </div>
         ))
       )}
