@@ -13,6 +13,7 @@ interface SlotInfo {
   id: string;
   name: string;
   refsCount: number;
+  source: 'direct' | string; // 'direct' or template name
 }
 
 interface TagData {
@@ -77,13 +78,32 @@ function TagDebug() {
 
     for (const child of children) {
       const isProperty = await child.isProperty();
-      if (!isProperty) {
-        nonPropertyChildCount++;
+      if (isProperty) {
+        const childName = richTextToString(child.text || []) || '[unnamed]';
+        const refs = await child.remsReferencingThis();
+        slots.push({ id: child._id, name: childName, refsCount: refs.length, source: 'direct' });
         continue;
       }
-      const childName = richTextToString(child.text || []) || '[unnamed]';
-      const refs = await child.remsReferencingThis();
-      slots.push({ id: child._id, name: childName, refsCount: refs.length });
+
+      // Template containers (e.g. "Vocab Template") are tagged with RemNote's
+      // built-in "Tag Template" tag. Check for it by name via getTagRems().
+      const childTags = await child.getTagRems();
+      const isTemplateContainer = childTags.some(
+        (t) => richTextToString(t.text || []) === 'Tag Template'
+      );
+      if (isTemplateContainer) {
+        const templateName = richTextToString(child.text || []) || '[unnamed template]';
+        const templateChildren = await child.getChildrenRem();
+        for (const tc of templateChildren) {
+          if (!await tc.isProperty()) continue;
+          const tcName = richTextToString(tc.text || []) || '[unnamed]';
+          const refs = await tc.remsReferencingThis();
+          slots.push({ id: tc._id, name: tcName, refsCount: refs.length, source: templateName });
+        }
+        continue;
+      }
+
+      nonPropertyChildCount++;
     }
 
     return { name, id: remId, taggedCount: taggedRems.length, slots, nonPropertyChildCount };
@@ -178,7 +198,7 @@ function TagDebug() {
   }
 
   return (
-    <div style={{ padding: 16, fontFamily: 'system-ui, -apple-system, sans-serif', color: 'var(--rn-clr-content-primary)', maxHeight: '80vh', overflowY: 'auto' }}>
+    <div style={{ padding: 16, fontFamily: 'system-ui, -apple-system, sans-serif', color: 'var(--rn-clr-content-primary)', maxHeight: '90vh', overflowY: 'auto' }}>
 
       {/* Header */}
       <div style={{ ...divider, display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -217,7 +237,12 @@ function TagDebug() {
       ) : (
         data.slots.map((slot) => (
           <div key={slot.id} style={{ border: '1px solid var(--rn-clr-background-tertiary)', borderRadius: 6, padding: 10, marginBottom: 8 }}>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>{slot.name}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{slot.name}</div>
+              <div style={{ fontSize: 10, color: 'var(--rn-clr-content-tertiary)', fontStyle: 'italic' }}>
+                {slot.source === 'direct' ? 'direct property' : `via "${slot.source}"`}
+              </div>
+            </div>
 
             <div style={{ marginBottom: 4 }}>
               <div style={label}>Property ID</div>
