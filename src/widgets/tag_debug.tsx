@@ -12,7 +12,6 @@ const richTextToString = (text: any[]): string =>
 interface SlotInfo {
   id: string;
   name: string;
-  isProperty: boolean;
   refsCount: number;
 }
 
@@ -21,6 +20,7 @@ interface TagData {
   id: string;
   taggedCount: number;
   slots: SlotInfo[];
+  nonPropertyChildCount: number;
 }
 
 const preStyle: React.CSSProperties = {
@@ -31,22 +31,22 @@ const preStyle: React.CSSProperties = {
   fontFamily: 'monospace',
   wordBreak: 'break-all',
   userSelect: 'all',
+  margin: 0,
 };
 
-const sectionHeader: React.CSSProperties = {
-  fontSize: '11px',
+const label: React.CSSProperties = {
+  fontSize: '10px',
   fontWeight: 600,
   textTransform: 'uppercase',
-  letterSpacing: '0.05em',
+  letterSpacing: '0.06em',
   color: 'var(--rn-clr-content-tertiary)',
-  marginBottom: '2px',
+  marginBottom: '3px',
 };
 
-const card: React.CSSProperties = {
-  border: '1px solid var(--rn-clr-background-tertiary)',
-  borderRadius: '6px',
-  padding: '10px',
-  marginBottom: '8px',
+const divider: React.CSSProperties = {
+  borderBottom: '1px solid var(--rn-clr-background-tertiary)',
+  marginBottom: '12px',
+  paddingBottom: '6px',
 };
 
 function TagDebug() {
@@ -67,40 +67,39 @@ function TagDebug() {
     if (!rem) return null;
 
     const name = richTextToString(rem.text || []) || '[unnamed]';
+    const [children, taggedRems] = await Promise.all([
+      rem.getChildrenRem(),
+      rem.taggedRem(),
+    ]);
 
-    const children = await rem.getChildrenRem();
     const slots: SlotInfo[] = [];
+    let nonPropertyChildCount = 0;
+
     for (const child of children) {
       const isProperty = await child.isProperty();
+      if (!isProperty) {
+        nonPropertyChildCount++;
+        continue;
+      }
       const childName = richTextToString(child.text || []) || '[unnamed]';
       const refs = await child.remsReferencingThis();
-      slots.push({
-        id: child._id,
-        name: childName,
-        isProperty,
-        refsCount: refs.length,
-      });
+      slots.push({ id: child._id, name: childName, refsCount: refs.length });
     }
 
-    const taggedRems = await rem.taggedRem();
-
-    return { name, id: remId, taggedCount: taggedRems.length, slots };
+    return { name, id: remId, taggedCount: taggedRems.length, slots, nonPropertyChildCount };
   }, [remId, refreshKey]);
 
   const handleForceDelete = async (slot: SlotInfo) => {
-    const warningMsg =
-      `⚠️  DANGER: Force Delete Slot\n\n` +
+    const confirmed = window.confirm(
+      `⚠️ DANGER — Force Delete Slot\n\n` +
       `Slot: "${slot.name}"\n` +
-      `ID: ${slot.id}\n` +
-      `Estimated refs to delete: ${slot.refsCount}\n\n` +
+      `ID: ${slot.id}\n\n` +
       `This will:\n` +
-      `  1. Delete the slot rem itself\n` +
-      `  2. Delete all property-value rems in tagged rems linked to it\n\n` +
-      `⚠️  MAKE A BACKUP BEFORE PROCEEDING.\n` +
-      `This operation is IRREVERSIBLE.\n\n` +
-      `Click OK to proceed.`;
-
-    if (!window.confirm(warningMsg)) return;
+      `  1. Remove the slot rem itself\n` +
+      `  2. Remove its property-value rem from every tagged rem\n\n` +
+      `MAKE A BACKUP FIRST. This is IRREVERSIBLE.\n\nProceed?`
+    );
+    if (!confirmed) return;
 
     setDeleting(slot.id);
     try {
@@ -111,33 +110,21 @@ function TagDebug() {
         return;
       }
 
-      // Delete property values from each tagged rem using precise API
       const taggedRems = await tagRem.taggedRem();
-      const propertyValueRems = await Promise.all(
-        taggedRems.map((r) => r.getTagPropertyAsRem(slot.id))
-      );
+      const valueRems = await Promise.all(taggedRems.map((r) => r.getTagPropertyAsRem(slot.id)));
 
       let deletedCount = 0;
-      for (const valueRem of propertyValueRems) {
-        if (valueRem) {
-          try {
-            await valueRem.remove();
-            deletedCount++;
-          } catch (e) {
-            console.error('[TagDebug] Failed to delete property value rem:', e);
-          }
+      for (const v of valueRems) {
+        if (v) {
+          try { await v.remove(); deletedCount++; }
+          catch (e) { console.error('[TagDebug] remove failed:', v._id, e); }
         }
       }
 
-      // Delete the slot rem itself
       const slotRem = await plugin.rem.findOne(slot.id);
-      if (slotRem) {
-        await slotRem.remove();
-      }
+      if (slotRem) await slotRem.remove();
 
-      await plugin.app.toast(
-        `Deleted slot "${slot.name}" and ${deletedCount} linked property value rem(s).`
-      );
+      await plugin.app.toast(`Deleted slot "${slot.name}" + ${deletedCount} property-value rem(s).`);
       setDeleted((prev) => ({ ...prev, [slot.id]: deletedCount }));
       setRefreshKey((k) => k + 1);
     } catch (e) {
@@ -149,112 +136,102 @@ function TagDebug() {
 
   if (!remId) {
     return (
-      <div className="p-4 text-sm" style={{ color: 'var(--rn-clr-content-primary)' }}>
-        No rem context. Focus on a tag rem in the editor, then run the command.
+      <div style={{ padding: 16, fontSize: 13, color: 'var(--rn-clr-content-primary)' }}>
+        Focus on a tag rem in the editor, then run <strong>Debug Tag Slots</strong>.
       </div>
     );
   }
 
   if (!data) {
     return (
-      <div className="p-4 text-sm" style={{ color: 'var(--rn-clr-content-primary)' }}>
+      <div style={{ padding: 16, fontSize: 13, color: 'var(--rn-clr-content-primary)' }}>
         Loading…
       </div>
     );
   }
 
   return (
-    <div
-      className="p-4 w-full max-h-[80vh] overflow-y-auto"
-      style={{ fontFamily: 'system-ui, -apple-system, sans-serif', color: 'var(--rn-clr-content-primary)' }}
-    >
-      <h2 style={{ fontSize: '15px', fontWeight: 'bold', marginBottom: '12px', paddingBottom: '6px', borderBottom: '1px solid var(--rn-clr-background-tertiary)' }}>
-        Tag Slot Debugger
-      </h2>
+    <div style={{ padding: 16, fontFamily: 'system-ui, -apple-system, sans-serif', color: 'var(--rn-clr-content-primary)', maxHeight: '80vh', overflowY: 'auto' }}>
 
-      <div style={{ marginBottom: '12px' }}>
-        <div style={sectionHeader}>Tag Name</div>
-        <div style={{ fontWeight: 600 }}>{data.name}</div>
+      {/* Header */}
+      <div style={{ ...divider, display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>Tag Slot Debugger</span>
       </div>
 
-      <div style={{ marginBottom: '12px' }}>
-        <div style={sectionHeader}>Tag Rem ID</div>
+      {/* Tag identity */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={label}>Tag Name</div>
+        <div style={{ fontWeight: 700, fontSize: 16 }}>{data.name}</div>
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <div style={label}>Tag Rem ID</div>
         <pre style={preStyle}>{data.id}</pre>
       </div>
-
-      <div style={{ marginBottom: '16px' }}>
-        <div style={sectionHeader}>Rems Tagged with This Tag</div>
-        <div style={{ fontSize: '20px', fontWeight: 700 }}>{data.taggedCount}</div>
+      <div style={{ marginBottom: 16, ...divider }}>
+        <div style={label}>Instances (rems tagged with this tag)</div>
+        <div style={{ fontSize: 20, fontWeight: 700 }}>{data.taggedCount}</div>
+        {data.nonPropertyChildCount > 0 && (
+          <div style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)', marginTop: 2 }}>
+            + {data.nonPropertyChildCount} non-property children hidden (rows / nested rems)
+          </div>
+        )}
       </div>
 
-      <h3 style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '8px', paddingBottom: '4px', borderBottom: '1px solid var(--rn-clr-background-tertiary)' }}>
-        Children / Slots ({data.slots.length})
-      </h3>
-
-      <div style={{ fontSize: '11px', color: 'var(--rn-clr-content-tertiary)', marginBottom: '10px' }}>
-        "Refs" = rems referencing this slot rem (proxy for property-value rems in tagged rems).
-        Ghost slots may appear here as non-properties with refs still pointing at them.
+      {/* Slots section */}
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+        Slots / Properties ({data.slots.length})
       </div>
 
-      {data.slots.length === 0 && (
-        <div style={{ color: 'var(--rn-clr-content-tertiary)', fontSize: '13px' }}>
-          No children found on this rem.
+      {data.slots.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--rn-clr-content-tertiary)', marginBottom: 12 }}>
+          No property-flagged children found on this rem.{' '}
+          {data.nonPropertyChildCount > 0 && 'Check that you focused on the tag definition rem, not a tagged instance.'}
         </div>
+      ) : (
+        data.slots.map((slot) => (
+          <div key={slot.id} style={{ border: '1px solid var(--rn-clr-background-tertiary)', borderRadius: 6, padding: 10, marginBottom: 8 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>{slot.name}</div>
+
+            <div style={{ marginBottom: 4 }}>
+              <div style={label}>Property ID</div>
+              <pre style={preStyle}>{slot.id}</pre>
+            </div>
+
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              <strong>Tagged rems with a value here:</strong> ~{slot.refsCount}
+            </div>
+
+            {deleted[slot.id] !== undefined && (
+              <div style={{ fontSize: 11, color: '#22c55e', fontWeight: 600, marginBottom: 4 }}>
+                ✓ Deleted — {deleted[slot.id]} property-value rem(s) removed from tagged rems.
+              </div>
+            )}
+
+            <button
+              disabled={!!deleting || deleted[slot.id] !== undefined}
+              onClick={() => handleForceDelete(slot)}
+              style={{
+                padding: '3px 10px',
+                backgroundColor: deleted[slot.id] !== undefined ? '#374151' : '#dc2626',
+                color: 'white',
+                border: 'none',
+                borderRadius: 4,
+                cursor: (deleting || deleted[slot.id] !== undefined) ? 'default' : 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+                opacity: deleting === slot.id ? 0.6 : 1,
+              }}
+            >
+              {deleting === slot.id ? 'Deleting…'
+                : deleted[slot.id] !== undefined ? `Deleted (${deleted[slot.id]} removed)`
+                : `Force Delete`}
+            </button>
+          </div>
+        ))
       )}
 
-      {data.slots.map((slot) => (
-        <div key={slot.id} style={card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div style={{ fontWeight: 600, fontSize: '13px' }}>{slot.name}</div>
-            <div style={{ fontSize: '12px', padding: '1px 6px', borderRadius: '10px', backgroundColor: slot.isProperty ? '#166534' : '#7f1d1d', color: 'white', whiteSpace: 'nowrap' }}>
-              {slot.isProperty ? 'property ✓' : 'NOT a property'}
-            </div>
-          </div>
-
-          <div style={{ marginTop: '6px' }}>
-            <div style={sectionHeader}>Slot ID</div>
-            <pre style={preStyle}>{slot.id}</pre>
-          </div>
-
-          <div style={{ marginTop: '6px', fontSize: '12px' }}>
-            <span style={{ marginRight: '12px' }}>
-              <strong>Refs count:</strong> {slot.refsCount}
-            </span>
-          </div>
-
-          {deleted[slot.id] !== undefined && (
-            <div style={{ marginTop: '6px', fontSize: '11px', color: '#22c55e', fontWeight: 600 }}>
-              ✓ Deleted — removed {deleted[slot.id]} property value rem(s) from tagged rems.
-            </div>
-          )}
-
-          <button
-            disabled={deleting === slot.id || deleted[slot.id] !== undefined}
-            onClick={() => handleForceDelete(slot)}
-            style={{
-              marginTop: '8px',
-              padding: '4px 10px',
-              backgroundColor: deleted[slot.id] !== undefined ? '#374151' : '#dc2626',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: deleting === slot.id || deleted[slot.id] !== undefined ? 'default' : 'pointer',
-              fontSize: '12px',
-              fontWeight: 600,
-              opacity: deleting === slot.id ? 0.6 : 1,
-            }}
-          >
-            {deleting === slot.id
-              ? 'Deleting…'
-              : deleted[slot.id] !== undefined
-              ? `Deleted (${deleted[slot.id]} refs removed)`
-              : `Force Delete (${slot.refsCount} refs)`}
-          </button>
-        </div>
-      ))}
-
-      <div style={{ marginTop: '16px', padding: '8px', backgroundColor: 'var(--rn-clr-background-secondary)', borderRadius: '4px', fontSize: '11px', color: 'var(--rn-clr-content-tertiary)' }}>
-        ⚠️ Always back up your RemNote knowledge base before using Force Delete. Disable this plugin when not in use to avoid accidental deletions.
+      <div style={{ marginTop: 12, padding: 8, backgroundColor: 'var(--rn-clr-background-secondary)', borderRadius: 4, fontSize: 11, color: 'var(--rn-clr-content-tertiary)' }}>
+        ⚠️ Back up your knowledge base before Force Delete. Disable this plugin when not in use.
       </div>
     </div>
   );
