@@ -6,7 +6,12 @@ import {
   WidgetLocation,
   BuiltInPowerupCodes,
 } from '@remnote/plugin-sdk';
-import { resolveTagRem, getColumnSlots } from '../lib/slotConfig';
+import {
+  resolveTagRem,
+  getColumnSlots,
+  getRowValueOrder,
+  RowValueEntry,
+} from '../lib/slotConfig';
 
 /**
  * Slot Inspector
@@ -62,19 +67,12 @@ interface SlotProbe {
   error: string | null;
 }
 
-interface RowOrderEntry {
-  slotId: string;
-  slotName: string;
-  valueRemId: string | null;
-  position: number | null;
-}
-
 interface RowOrder {
   tagName: string;
   /** The tag's column order, i.e. what the table header shows. */
   columnOrder: string[];
   /** Slots that have a value on this row, sorted by that value's position. */
-  valueOrder: RowOrderEntry[];
+  valueOrder: RowValueEntry[];
   /** Columns with no value rem on this row. */
   missing: string[];
 }
@@ -245,11 +243,10 @@ function SlotInspector() {
 
     const target = await describe(rem);
 
-    // Card extras do NOT follow the tag's column order: reordering columns left
-    // the rendered order unchanged. The next suspect is the order of the row's
-    // own property-value rems, which is fixed when each value is first filled in
-    // and is not rewritten by a column reorder. Dump it so the two can be
-    // compared directly.
+    // Card extras render in the order of the ROW's property-value rems, not the
+    // tag's column order and not the stored config order. Dump both so they can
+    // be compared: after a column drag they diverge, and the card follows the
+    // row.
     let rowOrder: RowOrder | null = null;
     try {
       const { tag } = await resolveTagRem(plugin, rem);
@@ -257,29 +254,15 @@ function SlotInspector() {
       const isRow = tag._id !== rem._id && tagsOfRem.some((t) => t._id === tag._id);
       if (isRow) {
         const columns = await getColumnSlots(tag);
-        const rawChildren: string[] = ((rem as any).children || []) as string[];
-        const entries: RowOrderEntry[] = [];
-        for (const col of columns) {
-          const valueRem = await rem.getTagPropertyAsRem(col._id).catch(() => undefined);
-          let position: number | null = null;
-          if (valueRem) {
-            const idx = rawChildren.indexOf(valueRem._id);
-            position = idx >= 0 ? idx : await valueRem.positionAmongstSiblings().catch(() => null) ?? null;
-          }
-          entries.push({
-            slotId: col._id,
-            slotName: richTextToString(col.text || []) || '[unnamed]',
-            valueRemId: valueRem?._id ?? null,
-            position,
-          });
-        }
-        const present = entries.filter((e) => e.position !== null);
-        present.sort((a, b) => (a.position as number) - (b.position as number));
+        const valueOrder = await getRowValueOrder(rem, columns);
+        const found = new Set(valueOrder.map((e) => e.slotId));
         rowOrder = {
           tagName: richTextToString(tag.text || []) || '[unnamed]',
           columnOrder: columns.map((c) => richTextToString(c.text || []) || '[unnamed]'),
-          valueOrder: present,
-          missing: entries.filter((e) => e.position === null).map((e) => e.slotName),
+          valueOrder,
+          missing: columns
+            .filter((c) => !found.has(c._id))
+            .map((c) => richTextToString(c.text || []) || '[unnamed]'),
         };
       }
     } catch (e) {
