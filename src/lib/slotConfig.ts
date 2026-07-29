@@ -183,6 +183,100 @@ export async function applyValueOrder(
   }
 }
 
+export const BULK_ORDER_BACKUP_KEY = 'bulkRowOrderBackup';
+
+export interface BulkOrderBackup {
+  tagId: string;
+  tagName: string;
+  /** Only rows that were actually changed, with their pre-change order. */
+  rows: { rowId: string; originalOrder: string[] }[];
+  timestamp: number;
+}
+
+export interface RowSyncPlan {
+  rowId: string;
+  name: string;
+  /** Slot names in their current order, for reporting. */
+  from: string[];
+  originalOrder: string[];
+  toIds: string[];
+}
+
+/**
+ * Work out which rows would change if every row's property values were put into
+ * `targetSlotIds` order. Read-only — call this before asking the user anything.
+ *
+ * Slots missing from `targetSlotIds` sort to the end, keeping their relative
+ * order, so a partial target (e.g. only the configured extras) leaves everything
+ * else alone.
+ */
+export async function planRowSync(
+  tag: Rem,
+  columns: Rem[],
+  targetSlotIds: string[]
+): Promise<{ plans: RowSyncPlan[]; totalRows: number }> {
+  const rank = new Map(targetSlotIds.map((id, i) => [id, i]));
+  const rankOf = (slotId: string) => rank.get(slotId) ?? Number.MAX_SAFE_INTEGER;
+
+  const rows = await tag.taggedRem();
+  const plans: RowSyncPlan[] = [];
+
+  for (const row of rows) {
+    const current = await getRowValueOrder(row, columns);
+    if (current.length < 2) continue;
+
+    // Tie-break on current position so equally-ranked slots keep their order.
+    const desired = current
+      .map((e, i) => ({ e, i }))
+      .sort((x, y) => rankOf(x.e.slotId) - rankOf(y.e.slotId) || x.i - y.i)
+      .map((w) => w.e);
+
+    if (desired.every((e, i) => e.valueRemId === current[i].valueRemId)) continue;
+
+    plans.push({
+      rowId: row._id,
+      name: richTextToString(row.text) || '[unnamed]',
+      from: current.map((e) => e.slotName),
+      originalOrder: current.map((e) => e.valueRemId),
+      toIds: desired.map((e) => e.valueRemId),
+    });
+  }
+
+  return { plans, totalRows: rows.length };
+}
+
+/**
+ * Apply a plan produced by `planRowSync`. The caller must have stored a backup
+ * first — this writes immediately and does not roll back on partial failure.
+ */
+export async function applyRowSync(
+  plugin: RNPlugin,
+  plans: RowSyncPlan[],
+  onProgress?: (completed: number, total: number) => void
+): Promise<{ done: number; failed: number }> {
+  let done = 0;
+  let failed = 0;
+
+  for (const plan of plans) {
+    const row = await plugin.rem.findOne(plan.rowId);
+    if (!row) {
+      failed++;
+      console.warn(`[RowSync] Row ${plan.rowId} no longer exists — skipped.`);
+    } else {
+      try {
+        await applyValueOrder(plugin, row, plan.toIds);
+        done++;
+      } catch (e) {
+        failed++;
+        console.error(`[RowSync] Row ${plan.rowId} failed:`, e);
+      }
+    }
+    onProgress?.(done + failed, plans.length);
+  }
+
+  return { done, failed };
+}
+
 export interface TagResolution {
   tag: Rem;
   /** Null when the focused rem already was the tag rem. */

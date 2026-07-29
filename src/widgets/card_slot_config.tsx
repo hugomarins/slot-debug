@@ -12,6 +12,10 @@ import {
   writeExtraSlotIds,
   resolveTagRem,
   getColumnSlots,
+  planRowSync,
+  applyRowSync,
+  BULK_ORDER_BACKUP_KEY,
+  BulkOrderBackup,
   richTextToString,
 } from '../lib/slotConfig';
 
@@ -114,6 +118,7 @@ function CardSlotConfig() {
   const [back, setBack] = useState<string[]>([]);
   const [opened, setOpened] = useState<{ front: string[]; back: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState<string | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
   useEffect(() => {
@@ -139,22 +144,8 @@ function CardSlotConfig() {
     };
   }, [targetId]);
 
-  // The renderer walks the tag's property children rather than the stored
-  // array, so the stored order is cosmetic. Normalising to column order keeps
-  // what we write identical to what RemNote's own UI would produce, and keeps
-  // the widget honest about the order the card will actually use.
-  const inColumnOrder = (ids: string[]): string[] => {
-    if (!setup) return ids;
-    const order = setup.candidates.map((c) => c.id);
-    const known = order.filter((id) => ids.includes(id));
-    const foreign = ids.filter((id) => !order.includes(id));
-    return [...known, ...foreign];
-  };
-
-  const apply = async (rawFront: string[], rawBack: string[]) => {
+  const apply = async (nextFront: string[], nextBack: string[]) => {
     if (!targetId) return;
-    const nextFront = inColumnOrder(rawFront);
-    const nextBack = inColumnOrder(rawBack);
     setBusy(true);
     // Optimistic: the UI is the source of truth for ordering while writing.
     setFront(nextFront);
@@ -192,6 +183,103 @@ function CardSlotConfig() {
     }
   };
 
+  const nameOf = (id: string) =>
+    setup?.candidates.find((c) => c.id === id)?.name ?? `[outside this tag: ${id}]`;
+
+  // Arrows only edit this list's order — no rows are touched until "Apply order
+  // to cards". Cards read each ROW's value order, so making an order real means
+  // rewriting every row, which must never sit behind a single arrow click.
+  const move = (side: 'front' | 'back', id: string, delta: number) => {
+    const current = [...(side === 'front' ? front : back)];
+    const i = current.indexOf(id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= current.length) return;
+    [current[i], current[j]] = [current[j], current[i]];
+    if (side === 'front') apply(current, back);
+    else apply(front, current);
+  };
+
+  const applyOrderToCards = async () => {
+    if (!setup) return;
+    setSyncing('Scanning rows…');
+    try {
+      const tag = await plugin.rem.findOne(setup.tagId);
+      if (!tag) throw new Error('Tag rem not found');
+
+      const pending = await plugin.storage.getLocal<BulkOrderBackup>(BULK_ORDER_BACKUP_KEY);
+      if (pending) {
+        setSyncing(null);
+        await plugin.app.toast(
+          `A previous sync of "${pending.tagName}" (${pending.rows.length} rows) is not undone yet. ` +
+          `Run "Undo Row Order Sync" first, or accept it.`
+        );
+        return;
+      }
+
+      // Front and back are disjoint sets over the same columns, and only the
+      // order *within* a side is observable, so concatenating them yields a
+      // single row sequence that satisfies both. Unlisted columns sort after.
+      const targetSlotIds = [...front, ...back];
+      const columns = await getColumnSlots(tag);
+      const { plans, totalRows } = await planRowSync(tag, columns, targetSlotIds);
+
+      console.group('[CardSlotConfig] Apply order to cards');
+      console.log('Target order:', targetSlotIds.map(nameOf).join(', '));
+      console.log(`${plans.length} of ${totalRows} rows would change.`);
+      plans.slice(0, 10).forEach((p) =>
+        console.log(`  "${p.name.slice(0, 60)}" from: ${p.from.join(', ')}`)
+      );
+      if (plans.length > 10) console.log(`  …and ${plans.length - 10} more.`);
+      console.groupEnd();
+
+      if (plans.length === 0) {
+        setSyncing(null);
+        await plugin.app.toast('Every row already renders in this order.');
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Apply this order to cards?\n\n` +
+        `Order: ${targetSlotIds.map(nameOf).join(', ')}\n` +
+        `Rows to rewrite: ${plans.length} of ${totalRows}\n\n` +
+        `Cards render extras in each ROW's value order, so this rewrites the ` +
+        `property-value rems of every affected row — rems RemNote maintains itself.\n\n` +
+        `NOTE: that order is shared by every card a row generates, so cards from ` +
+        `other columns of this table are affected too.\n\n` +
+        `This does NOT reorder the table's columns, so rows you create later will ` +
+        `still follow the current column order — drag the columns to match.\n\n` +
+        `BACK UP YOUR KNOWLEDGE BASE FIRST. Undo with "Undo Row Order Sync".\n\nProceed?`
+      );
+      if (!confirmed) {
+        setSyncing(null);
+        await plugin.app.toast('Cancelled — nothing was written.');
+        return;
+      }
+
+      await plugin.storage.setLocal(BULK_ORDER_BACKUP_KEY, {
+        tagId: tag._id,
+        tagName: setup.tagName,
+        rows: plans.map((p) => ({ rowId: p.rowId, originalOrder: p.originalOrder })),
+        timestamp: Date.now(),
+      } as BulkOrderBackup);
+
+      const { done, failed } = await applyRowSync(plugin, plans, (completed, total) => {
+        setSyncing(`Rewriting rows… ${completed}/${total}`);
+      });
+
+      setSyncing(null);
+      await plugin.app.toast(
+        failed === 0
+          ? `Reordered ${done} rows. "Undo Row Order Sync" reverts.`
+          : `Reordered ${done} rows, ${failed} failed — see console.`
+      );
+    } catch (e) {
+      console.error('[CardSlotConfig] Apply order failed:', e);
+      setSyncing(null);
+      await plugin.app.toast('Apply order failed — see console.');
+    }
+  };
+
   if (!remId) {
     return (
       <div style={{ padding: 16, fontSize: 13, color: 'var(--rn-clr-content-primary)' }}>
@@ -208,9 +296,6 @@ function CardSlotConfig() {
       </div>
     );
   }
-
-  const nameOf = (id: string) =>
-    setup.candidates.find((c) => c.id === id)?.name ?? `[outside this tag: ${id}]`;
 
   const renderSide = (side: 'front' | 'back', selected: string[], title: string) => {
     const unselected = setup.candidates.filter((c) => !selected.includes(c.id));
@@ -252,7 +337,23 @@ function CardSlotConfig() {
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{nameOf(id)}</span>
                 <button
-                  disabled={busy}
+                  disabled={busy || !!syncing || i === 0}
+                  onClick={() => move(side, id, -1)}
+                  style={{ ...iconBtn, opacity: i === 0 ? 0.3 : 1 }}
+                  title="Move up (takes effect on cards via Apply order)"
+                >
+                  ↑
+                </button>
+                <button
+                  disabled={busy || !!syncing || i === selected.length - 1}
+                  onClick={() => move(side, id, 1)}
+                  style={{ ...iconBtn, opacity: i === selected.length - 1 ? 0.3 : 1 }}
+                  title="Move down (takes effect on cards via Apply order)"
+                >
+                  ↓
+                </button>
+                <button
+                  disabled={busy || !!syncing}
                   onClick={() => toggle(side, id)}
                   style={{ ...iconBtn, color: '#dc2626' }}
                   title="Remove"
@@ -339,8 +440,8 @@ function CardSlotConfig() {
         </select>
       </div>
 
-      {renderSide('front', inColumnOrder(front), 'Extra properties to show on front of card')}
-      {renderSide('back', inColumnOrder(back), 'Extra properties to show on back of card')}
+      {renderSide('front', front, 'Extra properties to show on front of card')}
+      {renderSide('back', back, 'Extra properties to show on back of card')}
 
       <div
         style={{
@@ -354,10 +455,47 @@ function CardSlotConfig() {
         }}
       >
         Cards render these in <strong>each row's own value order</strong> — the order that
-        row's properties were first filled in. Neither the order you add them here nor the
-        table's column order changes that, so the numbering above is only for reference. A
-        slot placed on the front is skipped on the back, so adding it to one side removes it
-        from the other.
+        row's properties were first filled in. The arrows above set the order you want, but
+        they change nothing on their own: use <strong>Apply order to cards</strong> to
+        rewrite the rows. A slot placed on the front is skipped on the back, so adding it to
+        one side removes it from the other, and blank cells never appear.
+      </div>
+
+      <div
+        style={{
+          border: '1px solid #7c3aed',
+          borderRadius: 6,
+          padding: 10,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            disabled={busy || !!syncing || front.length + back.length < 2}
+            onClick={applyOrderToCards}
+            style={{
+              ...btn,
+              backgroundColor: '#7c3aed',
+              color: 'white',
+              border: 'none',
+              opacity: busy || !!syncing || front.length + back.length < 2 ? 0.5 : 1,
+            }}
+          >
+            {syncing ? syncing : 'Apply order to cards'}
+          </button>
+          <span style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)' }}>
+            Counts the rows first and asks before writing.
+          </span>
+        </div>
+        <div
+          style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)', marginTop: 8, lineHeight: 1.5 }}
+        >
+          Rewrites every affected row so its cards render in the order above. The order is
+          shared by <strong>all</strong> cards a row generates, not just the target selected
+          here. Rows created later follow the table's <strong>column</strong> order instead,
+          so drag the columns to match if you want new rows to agree. Undo with the{' '}
+          <em>Undo Row Order Sync</em> command.
+        </div>
       </div>
 
       <div

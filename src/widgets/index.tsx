@@ -10,6 +10,10 @@ import {
 	getColumnSlots,
 	getRowValueOrder,
 	applyValueOrder,
+	planRowSync,
+	applyRowSync,
+	BULK_ORDER_BACKUP_KEY,
+	BulkOrderBackup,
 	readExtraSlotIds,
 	describeSlotIds,
 	FRONT_SLOT,
@@ -18,15 +22,6 @@ import {
 } from "../lib/slotConfig";
 
 const ROW_ORDER_BACKUP_KEY = 'rowOrderProbeBackup';
-const BULK_ORDER_BACKUP_KEY = 'bulkRowOrderBackup';
-
-interface BulkOrderBackup {
-	tagId: string;
-	tagName: string;
-	/** Only rows that were actually changed, with their pre-change order. */
-	rows: { rowId: string; originalOrder: string[] }[];
-	timestamp: number;
-}
 
 interface RowOrderBackup {
 	rowId: string;
@@ -315,32 +310,16 @@ async function onActivate(plugin: ReactRNPlugin) {
 			console.group(`[RowOrderSync] Tag "${tagName}" (${tag._id})`);
 
 			const columns = await getColumnSlots(tag);
-			const columnIndex = new Map(columns.map((c, i) => [c._id, i]));
 			console.log('Column order:', columns.map((c) => slotRichTextToString(c.text)).join(', '));
 
-			const rows = await tag.taggedRem();
-			console.log(`Scanning ${rows.length} rows…`);
+			console.log('Scanning rows…');
+			const { plans, totalRows } = await planRowSync(
+				tag,
+				columns,
+				columns.map((c) => c._id)
+			);
 
-			// Dry run: work out which rows differ before touching anything.
-			const plans: { row: typeof rows[number]; name: string; from: string[]; toIds: string[] }[] = [];
-			for (let i = 0; i < rows.length; i++) {
-				const row = rows[i];
-				const current = await getRowValueOrder(row, columns);
-				if (current.length < 2) continue;
-				const desired = [...current].sort(
-					(a, b) => (columnIndex.get(a.slotId) ?? 0) - (columnIndex.get(b.slotId) ?? 0)
-				);
-				if (desired.every((e, j) => e.valueRemId === current[j].valueRemId)) continue;
-				plans.push({
-					row,
-					name: slotRichTextToString(row.text) || '[unnamed]',
-					from: current.map((e) => e.slotName),
-					toIds: desired.map((e) => e.valueRemId),
-				});
-				if ((i + 1) % 100 === 0) console.log(`  …scanned ${i + 1}/${rows.length}`);
-			}
-
-			console.log(`DRY RUN: ${plans.length} of ${rows.length} rows would change.`);
+			console.log(`DRY RUN: ${plans.length} of ${totalRows} rows would change.`);
 			plans.slice(0, 10).forEach((p) => {
 				console.log(`  "${p.name.slice(0, 60)}"`);
 				console.log(`     from: ${p.from.join(', ')}`);
@@ -357,7 +336,7 @@ async function onActivate(plugin: ReactRNPlugin) {
 			const confirmed = window.confirm(
 				`Sync row property order to column order?\n\n` +
 				`Tag: "${tagName}"\n` +
-				`Rows to change: ${plans.length} of ${rows.length}\n` +
+				`Rows to change: ${plans.length} of ${totalRows}\n` +
 				`Target order: ${columns.map((c) => slotRichTextToString(c.text)).join(', ')}\n\n` +
 				`This moves property-value rems that RemNote maintains itself, on every ` +
 				`affected row. BACK UP YOUR KNOWLEDGE BASE FIRST.\n\n` +
@@ -371,33 +350,17 @@ async function onActivate(plugin: ReactRNPlugin) {
 			}
 
 			// Snapshot before the first write so an interrupted run is still undoable.
-			const backup: BulkOrderBackup = {
+			await plugin.storage.setLocal(BULK_ORDER_BACKUP_KEY, {
 				tagId: tag._id,
 				tagName,
-				rows: [],
+				rows: plans.map((p) => ({ rowId: p.rowId, originalOrder: p.originalOrder })),
 				timestamp: Date.now(),
-			};
-			for (const p of plans) {
-				const current = await getRowValueOrder(p.row, columns);
-				backup.rows.push({ rowId: p.row._id, originalOrder: current.map((e) => e.valueRemId) });
-			}
-			await plugin.storage.setLocal(BULK_ORDER_BACKUP_KEY, backup);
-			console.log(`Snapshot stored for ${backup.rows.length} rows.`);
+			} as BulkOrderBackup);
+			console.log(`Snapshot stored for ${plans.length} rows.`);
 
-			let done = 0;
-			let failed = 0;
-			for (const p of plans) {
-				try {
-					await applyValueOrder(plugin, p.row, p.toIds);
-					done++;
-				} catch (e) {
-					failed++;
-					console.error(`[RowOrderSync] Row ${p.row._id} failed:`, e);
-				}
-				if ((done + failed) % 25 === 0) {
-					console.log(`  …applied ${done + failed}/${plans.length}`);
-				}
-			}
+			const { done, failed } = await applyRowSync(plugin, plans, (completed, total) => {
+				if (completed % 25 === 0) console.log(`  …applied ${completed}/${total}`);
+			});
 
 			console.log(`Done. ${done} rows reordered, ${failed} failed.`);
 			console.log('Backup kept — run "Undo Row Order Sync" to revert, or ignore it to accept.');
