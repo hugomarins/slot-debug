@@ -4,13 +4,14 @@ import {
   usePlugin,
   useRunAsync,
   WidgetLocation,
-  BuiltInPowerupCodes,
 } from '@remnote/plugin-sdk';
 import {
   FRONT_SLOT,
   BACK_SLOT,
   readExtraSlotIds,
   writeExtraSlotIds,
+  resolveTagRem,
+  getColumnSlots,
   richTextToString,
 } from '../lib/slotConfig';
 
@@ -88,43 +89,12 @@ function CardSlotConfig() {
     const focused = await plugin.rem.findOne(remId);
     if (!focused) return null;
 
-    // Resolve the tag rem: the focused rem itself if it is used as a tag,
-    // otherwise a tag it carries, otherwise its parent if it is a slot.
-    let tag = focused;
-    let resolvedFrom: string | null = null;
+    const { tag, resolvedFrom } = await resolveTagRem(plugin, focused);
 
-    const isTag = await focused.hasPowerup(BuiltInPowerupCodes.UsedAsTag).catch(() => false);
-    if (!isTag) {
-      const tags = await focused.getTagRems().catch(() => [] as typeof focused[]);
-      const withProps: typeof focused[] = [];
-      for (const t of tags) {
-        const kids = await t.getChildrenRem();
-        for (const k of kids) {
-          if (await k.isProperty().catch(() => false)) {
-            withProps.push(t);
-            break;
-          }
-        }
-      }
-      if (withProps.length > 0) {
-        tag = withProps[0];
-        resolvedFrom = `tag of the focused rem`;
-      } else if (await focused.isProperty().catch(() => false)) {
-        const parent = await focused.getParentRem();
-        if (parent) {
-          tag = parent;
-          resolvedFrom = `parent of the focused slot`;
-        }
-      }
-    }
-
-    const children = await tag.getChildrenRem();
-    const candidates: SlotOption[] = [];
-    for (const c of children) {
-      if (await c.isProperty().catch(() => false)) {
-        candidates.push({ id: c._id, name: richTextToString(c.text) || '[unnamed]' });
-      }
-    }
+    const candidates: SlotOption[] = (await getColumnSlots(tag)).map((c) => ({
+      id: c._id,
+      name: richTextToString(c.text) || '[unnamed]',
+    }));
 
     const tagName = richTextToString(tag.text) || '[unnamed]';
     const targets: Target[] = [
@@ -169,8 +139,22 @@ function CardSlotConfig() {
     };
   }, [targetId]);
 
-  const apply = async (nextFront: string[], nextBack: string[]) => {
+  // The renderer walks the tag's property children rather than the stored
+  // array, so the stored order is cosmetic. Normalising to column order keeps
+  // what we write identical to what RemNote's own UI would produce, and keeps
+  // the widget honest about the order the card will actually use.
+  const inColumnOrder = (ids: string[]): string[] => {
+    if (!setup) return ids;
+    const order = setup.candidates.map((c) => c.id);
+    const known = order.filter((id) => ids.includes(id));
+    const foreign = ids.filter((id) => !order.includes(id));
+    return [...known, ...foreign];
+  };
+
+  const apply = async (rawFront: string[], rawBack: string[]) => {
     if (!targetId) return;
+    const nextFront = inColumnOrder(rawFront);
+    const nextBack = inColumnOrder(rawBack);
     setBusy(true);
     // Optimistic: the UI is the source of truth for ordering while writing.
     setFront(nextFront);
@@ -193,23 +177,19 @@ function CardSlotConfig() {
     setBusy(false);
   };
 
+  // A slot present on both sides only renders on the front — the back copy is
+  // silently dropped — so adding to one side removes it from the other, which
+  // is also why RemNote's own chip lists are always disjoint.
   const toggle = (side: 'front' | 'back', id: string) => {
-    const current = side === 'front' ? front : back;
-    const next = current.includes(id)
-      ? current.filter((x) => x !== id)
-      : [...current, id];
-    if (side === 'front') apply(next, back);
-    else apply(front, next);
-  };
-
-  const move = (side: 'front' | 'back', id: string, delta: number) => {
-    const current = [...(side === 'front' ? front : back)];
-    const i = current.indexOf(id);
-    const j = i + delta;
-    if (i < 0 || j < 0 || j >= current.length) return;
-    [current[i], current[j]] = [current[j], current[i]];
-    if (side === 'front') apply(current, back);
-    else apply(front, current);
+    if (side === 'front') {
+      const removing = front.includes(id);
+      apply(removing ? front.filter((x) => x !== id) : [...front, id],
+            removing ? back : back.filter((x) => x !== id));
+    } else {
+      const removing = back.includes(id);
+      apply(removing ? front : front.filter((x) => x !== id),
+            removing ? back.filter((x) => x !== id) : [...back, id]);
+    }
   };
 
   if (!remId) {
@@ -271,22 +251,6 @@ function CardSlotConfig() {
                   {i + 1}.
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{nameOf(id)}</span>
-                <button
-                  disabled={busy || i === 0}
-                  onClick={() => move(side, id, -1)}
-                  style={{ ...iconBtn, opacity: i === 0 ? 0.3 : 1 }}
-                  title="Move up"
-                >
-                  ↑
-                </button>
-                <button
-                  disabled={busy || i === selected.length - 1}
-                  onClick={() => move(side, id, 1)}
-                  style={{ ...iconBtn, opacity: i === selected.length - 1 ? 0.3 : 1 }}
-                  title="Move down"
-                >
-                  ↓
-                </button>
                 <button
                   disabled={busy}
                   onClick={() => toggle(side, id)}
@@ -375,8 +339,24 @@ function CardSlotConfig() {
         </select>
       </div>
 
-      {renderSide('front', front, 'Extra properties to show on front of card')}
-      {renderSide('back', back, 'Extra properties to show on back of card')}
+      {renderSide('front', inColumnOrder(front), 'Extra properties to show on front of card')}
+      {renderSide('back', inColumnOrder(back), 'Extra properties to show on back of card')}
+
+      <div
+        style={{
+          fontSize: 11,
+          color: 'var(--rn-clr-content-tertiary)',
+          backgroundColor: 'var(--rn-clr-background-secondary)',
+          borderRadius: 4,
+          padding: '8px 10px',
+          marginBottom: 12,
+          lineHeight: 1.5,
+        }}
+      >
+        Cards render these in <strong>table column order</strong>, not in the order you add
+        them — the numbering above reflects that. A slot placed on the front is skipped on
+        the back, so adding it to one side removes it from the other.
+      </div>
 
       <div
         style={{
