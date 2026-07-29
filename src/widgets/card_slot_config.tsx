@@ -353,9 +353,11 @@ function CardSlotConfig() {
           lineHeight: 1.5,
         }}
       >
-        Cards render these in <strong>table column order</strong>, not in the order you add
-        them — the numbering above reflects that. A slot placed on the front is skipped on
-        the back, so adding it to one side removes it from the other.
+        Cards render these in <strong>each row's own value order</strong> — the order that
+        row's properties were first filled in. Neither the order you add them here nor the
+        table's column order changes that, so the numbering above is only for reference. A
+        slot placed on the front is skipped on the back, so adding it to one side removes it
+        from the other.
       </div>
 
       <div

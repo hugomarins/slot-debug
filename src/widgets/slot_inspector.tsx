@@ -6,6 +6,7 @@ import {
   WidgetLocation,
   BuiltInPowerupCodes,
 } from '@remnote/plugin-sdk';
+import { resolveTagRem, getColumnSlots } from '../lib/slotConfig';
 
 /**
  * Slot Inspector
@@ -59,6 +60,23 @@ interface SlotProbe {
   refs: RefInfo[];
   storageRemId: string | null;
   error: string | null;
+}
+
+interface RowOrderEntry {
+  slotId: string;
+  slotName: string;
+  valueRemId: string | null;
+  position: number | null;
+}
+
+interface RowOrder {
+  tagName: string;
+  /** The tag's column order, i.e. what the table header shows. */
+  columnOrder: string[];
+  /** Slots that have a value on this row, sorted by that value's position. */
+  valueOrder: RowOrderEntry[];
+  /** Columns with no value rem on this row. */
+  missing: string[];
 }
 
 interface RemReport {
@@ -227,6 +245,47 @@ function SlotInspector() {
 
     const target = await describe(rem);
 
+    // Card extras do NOT follow the tag's column order: reordering columns left
+    // the rendered order unchanged. The next suspect is the order of the row's
+    // own property-value rems, which is fixed when each value is first filled in
+    // and is not rewritten by a column reorder. Dump it so the two can be
+    // compared directly.
+    let rowOrder: RowOrder | null = null;
+    try {
+      const { tag } = await resolveTagRem(plugin, rem);
+      const tagsOfRem = await rem.getTagRems().catch(() => []);
+      const isRow = tag._id !== rem._id && tagsOfRem.some((t) => t._id === tag._id);
+      if (isRow) {
+        const columns = await getColumnSlots(tag);
+        const rawChildren: string[] = ((rem as any).children || []) as string[];
+        const entries: RowOrderEntry[] = [];
+        for (const col of columns) {
+          const valueRem = await rem.getTagPropertyAsRem(col._id).catch(() => undefined);
+          let position: number | null = null;
+          if (valueRem) {
+            const idx = rawChildren.indexOf(valueRem._id);
+            position = idx >= 0 ? idx : await valueRem.positionAmongstSiblings().catch(() => null) ?? null;
+          }
+          entries.push({
+            slotId: col._id,
+            slotName: richTextToString(col.text || []) || '[unnamed]',
+            valueRemId: valueRem?._id ?? null,
+            position,
+          });
+        }
+        const present = entries.filter((e) => e.position !== null);
+        present.sort((a, b) => (a.position as number) - (b.position as number));
+        rowOrder = {
+          tagName: richTextToString(tag.text || []) || '[unnamed]',
+          columnOrder: columns.map((c) => richTextToString(c.text || []) || '[unnamed]'),
+          valueOrder: present,
+          missing: entries.filter((e) => e.position === null).map((e) => e.slotName),
+        };
+      }
+    } catch (e) {
+      console.warn('[SlotInspector] row-order probe failed:', e);
+    }
+
     // A tag rem can have hundreds of children (rows). Only property children are
     // table columns / slots, and `describe` costs ~50 round trips each, so scan
     // properties only and report how many were skipped.
@@ -245,6 +304,7 @@ function SlotInspector() {
       target,
       children: childReports,
       skippedChildren: children.length - propertyChildren.length,
+      rowOrder,
     };
   }, [remId, refreshKey]);
 
@@ -442,6 +502,46 @@ function SlotInspector() {
 
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Target rem</div>
       {renderRem(report.target, true)}
+
+      {report.rowOrder && (
+        <div
+          style={{
+            border: '1px solid #7c3aed',
+            borderRadius: 6,
+            padding: 10,
+            margin: '16px 0',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+            Row property-value order
+          </div>
+          <div
+            style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)', marginBottom: 8 }}
+          >
+            This rem is a row of "{report.rowOrder.tagName}". Compare the two orders below
+            against the order the card actually renders.
+          </div>
+
+          <div style={label}>Tag column order (table header)</div>
+          <pre style={{ ...preStyle, marginBottom: 8 }}>
+            {report.rowOrder.columnOrder.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+          </pre>
+
+          <div style={label}>This row's value order (position among row children)</div>
+          <pre style={preStyle}>
+            {report.rowOrder.valueOrder
+              .map((e, i) => `${i + 1}. ${e.slotName}  (pos ${e.position}, value ${e.valueRemId})`)
+              .join('\n') || '(no values on this row)'}
+          </pre>
+          {report.rowOrder.missing.length > 0 && (
+            <div
+              style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)', marginTop: 6 }}
+            >
+              No value on this row: {report.rowOrder.missing.join(', ')}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ fontSize: 13, fontWeight: 700, margin: '16px 0 8px' }}>
         Property children ({report.children.length}) — table columns / slots live here

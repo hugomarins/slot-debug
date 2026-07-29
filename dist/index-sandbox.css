@@ -505,6 +505,9 @@ video {
 .collapse {
   visibility: collapse;
 }
+.fixed {
+  position: fixed;
+}
 .inline-block {
   display: inline-block;
 }

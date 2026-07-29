@@ -21,10 +21,19 @@ import {
  *   - A slot column that generates its own cards: stored on that slot rem.
  *
  * The value is rich text made of rem references pointing at the slot rems to
- * render. Its ORDER IS IGNORED: the renderer walks the tag's property children,
- * so extras always appear in table column order (verified by writing two slots
- * in reverse column order and seeing them render in column order anyway). A
- * slot listed on both sides renders only on the front.
+ * render. Two things about ordering, both verified:
+ *
+ *   - This array's order is IGNORED. Writing two slots in reverse order still
+ *     rendered them the other way round.
+ *   - Cards render extras in the order of THAT ROW's property-value rems, which
+ *     is fixed when each value is first filled in. It is not the tag's column
+ *     order: after dragging a column, the table header changed but the rendered
+ *     card did not, and the row's value positions still held the old order.
+ *
+ * So render order is per-row, and changing it means reordering a row's
+ * property-value children — not this array and not the columns.
+ *
+ * A slot listed on both sides renders only on the front.
  *
  * IMPORTANT: the SDK resolves built-in powerup slots via
  * `PowerupSlotCodeMap[powerupCode][slot]`, so these calls must use the slot
