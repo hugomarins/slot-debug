@@ -98,21 +98,6 @@ export async function getColumnSlots(tagRem: Rem): Promise<Rem[]> {
   return out;
 }
 
-/**
- * The slots that may be shown on a card owned by `rem`.
- *
- * For a tag rem those are its column slots. For a slot rem they are its
- * siblings, i.e. the column slots of its parent.
- */
-export async function getCandidateSlots(plugin: RNPlugin, rem: Rem): Promise<Rem[]> {
-  const own = await getColumnSlots(rem);
-  if (own.length > 0) return own;
-
-  const parent = await rem.getParentRem();
-  if (!parent) return [];
-  return (await getColumnSlots(parent)).filter((s) => s._id !== rem._id);
-}
-
 export interface RowValueEntry {
   slotId: string;
   slotName: string;
@@ -205,26 +190,6 @@ export async function getExtraCandidateSlots(tag: Rem): Promise<Rem[]> {
     out.push(c);
   }
   return out;
-}
-
-/**
- * Absolute position of each column slot among ALL of the tag's children.
- *
- * Table columns are not children 0..n of the tag — they are interleaved with
- * every row, so a tag with 6 columns and 525 rows has column positions spread
- * anywhere in 0..530. Any code that moves a column must use these absolute
- * indices, never the column's index within the filtered column list.
- */
-export async function getColumnPositions(
-  columns: Rem[]
-): Promise<{ id: string; name: string; position: number | null }[]> {
-  return Promise.all(
-    columns.map(async (c) => ({
-      id: c._id,
-      name: richTextToString(c.text) || '[unnamed]',
-      position: (await c.positionAmongstSiblings().catch(() => null)) ?? null,
-    }))
-  );
 }
 
 /**
