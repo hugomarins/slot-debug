@@ -1,6 +1,6 @@
-# Slot Debug
+# Table Card & Slot Toolkit
 
-A surgical tool for RemNote tag slots/properties. It does two things:
+A surgical tool for the flashcards and slots (properties) of RemNote tags and tables. It does two things:
 
 1. **Restores the "extra properties on front/back of card" picker** that RemNote removed from the primary column of a table — the reason cloze tables can no longer be configured at all.
 2. **Inspects and repairs tag slots** — finding ghost slots whose deletion failed (but which keep generating flashcards) and force-deleting them along with their property-value child rems.

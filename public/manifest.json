@@ -1,7 +1,7 @@
 {
 	"manifestVersion": 1,
 	"id": "slot_debug",
-	"name": "Slot Debug",
+	"name": "Table Card & Slot Toolkit",
 	"author": "hugomarins",
 	"repoUrl": "https://github.com/hugomarins/slot-debug",
 	"enableOnMobile": true,
