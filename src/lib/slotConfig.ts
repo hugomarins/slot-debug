@@ -1,5 +1,6 @@
 import {
   BuiltInPowerupCodes,
+  PropertyType,
   RNPlugin,
   PluginRem as Rem,
   RichTextInterface,
@@ -13,11 +14,11 @@ import {
  * owns the card:
  *
  *   - Primary card (row front -> row backText, and cloze cards made from the
- *     row's own text): stored on the TAG rem. The "Definition" column in the
- *     table UI is not a real column — it renders the row's backText — so
- *     RemNote uses it only as the entry point for this config. Cloze tables
- *     have no definition column at all, which is why they lost the menu while
- *     keeping the stored values.
+ *     row's own text): stored on the TAG rem. A definition-type column IS a real
+ *     slot rem, but it holds no value of its own — it surfaces the row's
+ *     backText — so RemNote used it only as the entry point for this config.
+ *     Cloze tables have no definition column at all, which is why they lost the
+ *     menu while keeping the stored values.
  *   - A slot column that generates its own cards: stored on that slot rem.
  *
  * The value is rich text made of rem references pointing at the slot rems to
@@ -181,6 +182,29 @@ export async function applyValueOrder(
     if (!valueRem) throw new Error(`Value rem ${orderedValueIds[i]} not found`);
     await valueRem.setParent(row, i);
   }
+}
+
+/**
+ * Column slots that can be shown as extra content on a card.
+ *
+ * Excludes definition-type columns. A definition column is a real slot rem, but
+ * it has no property-value rem of its own — it surfaces the row's `backText`,
+ * i.e. it IS the primary card's back. So it cannot be an "extra" (circular on
+ * the back, spoils the answer on the front), and it can never take part in row
+ * value ordering because `getRowValueOrder` finds no value rem for it. RemNote's
+ * own picker omits it as well.
+ *
+ * `getColumnSlots` deliberately still returns it: it is a real table column, and
+ * column-order code must keep seeing it to reason about positions correctly.
+ */
+export async function getExtraCandidateSlots(tag: Rem): Promise<Rem[]> {
+  const out: Rem[] = [];
+  for (const c of await getColumnSlots(tag)) {
+    const type = await c.getPropertyType().catch(() => undefined);
+    if (type === PropertyType.DEFINITION) continue;
+    out.push(c);
+  }
+  return out;
 }
 
 /**

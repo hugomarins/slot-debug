@@ -12,6 +12,7 @@ import {
   writeExtraSlotIds,
   resolveTagRem,
   getColumnSlots,
+  getExtraCandidateSlots,
   planRowSync,
   applyRowSync,
   planColumnOrder,
@@ -29,10 +30,14 @@ import {
  *
  * The primary card — the row's front -> backText, and any cloze cards made from
  * the row's own text — stores its config on the TAG rem. RemNote used to expose
- * that through the pseudo-column rendering the row's backText ("Definition"),
- * so tables without one (cloze tables) lost the entry point entirely while
- * keeping the stored values live. Slot columns that generate their own cards
- * store their config on the slot rem and keep their own menu.
+ * that through the definition-type column that surfaces the row's backText, so
+ * tables without one (cloze tables) lost the entry point entirely while keeping
+ * the stored values live. Slot columns that generate their own cards store their
+ * config on the slot rem and keep their own menu.
+ *
+ * Definition-type columns are never offered as extras or as targets: such a
+ * column has no value of its own, so it can neither be shown as extra content
+ * nor take part in row value ordering.
  */
 
 interface SlotOption {
@@ -97,7 +102,11 @@ function CardSlotConfig() {
 
     const { tag, resolvedFrom } = await resolveTagRem(plugin, focused);
 
-    const candidates: SlotOption[] = (await getColumnSlots(tag)).map((c) => ({
+    // Definition-type columns are excluded: such a column IS the primary card's
+    // back (the row's backText), has no property-value rem, and RemNote's own
+    // picker omits it too. Offering it would also add a bogus target whose
+    // config nothing reads.
+    const candidates: SlotOption[] = (await getExtraCandidateSlots(tag)).map((c) => ({
       id: c._id,
       name: richTextToString(c.text) || '[unnamed]',
     }));
