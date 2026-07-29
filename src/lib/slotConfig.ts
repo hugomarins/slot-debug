@@ -118,6 +118,8 @@ export interface RowValueEntry {
   valueRemId: string;
   /** Index among the row's children — this is what decides card render order. */
   position: number;
+  /** False when the cell is blank; blank cells are omitted from cards entirely. */
+  hasValue: boolean;
 }
 
 /**
@@ -138,11 +140,21 @@ export async function getRowValueOrder(row: Rem, columns: Rem[]): Promise<RowVal
     for (const node of (child.text || []) as any[]) {
       const id = node && typeof node === 'object' && node.i === 'q' ? node._id : undefined;
       if (id && slotNames.has(id)) {
+        // The cell content is whatever is left once the slot reference itself is
+        // dropped, plus any backText. A blank cell still has a value rem, but it
+        // is skipped when the card renders, so it cannot be used to observe order.
+        const rest = ((child.text || []) as any[]).filter(
+          (n) => !(n && typeof n === 'object' && n.i === 'q' && n._id === id)
+        );
+        const content =
+          richTextToString(rest) + richTextToString((child as any).backText || []);
+
         out.push({
           slotId: id,
           slotName: slotNames.get(id)!,
           valueRemId: child._id,
           position: index,
+          hasValue: content.trim() !== '',
         });
         break;
       }

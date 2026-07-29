@@ -10,10 +10,23 @@ import {
 	getColumnSlots,
 	getRowValueOrder,
 	applyValueOrder,
+	readExtraSlotIds,
+	describeSlotIds,
+	FRONT_SLOT,
+	BACK_SLOT,
 	richTextToString as slotRichTextToString,
 } from "../lib/slotConfig";
 
 const ROW_ORDER_BACKUP_KEY = 'rowOrderProbeBackup';
+const BULK_ORDER_BACKUP_KEY = 'bulkRowOrderBackup';
+
+interface BulkOrderBackup {
+	tagId: string;
+	tagName: string;
+	/** Only rows that were actually changed, with their pre-change order. */
+	rows: { rowId: string; originalOrder: string[] }[];
+	timestamp: number;
+}
 
 interface RowOrderBackup {
 	rowId: string;
@@ -77,15 +90,19 @@ async function onActivate(plugin: ReactRNPlugin) {
 
 
 	// --- Row value-order probe -------------------------------------------
-	// Cards render extras in the order of the ROW's property-value rems. This
-	// reorders one row's value rems to match the tag's column order to find out
-	// whether that order is (a) writable at all, (b) reflected on the card, and
-	// (c) stable. Reversible via "PROBE: Restore Row Value Order".
+	// Cards render extras in the order of the ROW's property-value rems. To see
+	// whether that order is causal rather than merely correlated, swap two slots
+	// that the card actually renders — same side, both non-empty — so the card
+	// must visibly flip if the order drives rendering.
+	//
+	// Sorting the whole row to column order is NOT a valid test: it can permute
+	// only blank or unconfigured slots and leave every rendered slot's relative
+	// order intact, which looks like a negative result but proves nothing.
 	await plugin.app.registerCommand({
 		id: 'probe-reorder-row-values',
-		name: 'PROBE: Reorder Row Values To Column Order',
+		name: 'PROBE: Swap Two Rendered Extras On Row',
 		description:
-			'Reversible — moves one row\'s property-value rems into the tag\'s column order to test whether card render order follows.',
+			'Reversible — swaps two non-empty, configured extras on one row to test whether card render order follows the row\'s value order.',
 		quickCode: 'prv',
 		action: async () => {
 			const row = await plugin.focus.getFocusedRem();
@@ -118,37 +135,64 @@ async function onActivate(plugin: ReactRNPlugin) {
 
 			const columns = await getColumnSlots(tag);
 			const current = await getRowValueOrder(row, columns);
-			const columnIndex = new Map(columns.map((c, i) => [c._id, i]));
+			const front = await readExtraSlotIds(tag, FRONT_SLOT);
+			const back = await readExtraSlotIds(tag, BACK_SLOT);
 
 			console.log('Column order:', columns.map((c) => slotRichTextToString(c.text)).join(', '));
 			console.log(
 				'Current value order:',
-				current.map((e) => `${e.slotName}@${e.position}`).join(', ')
+				current.map((e) => `${e.slotName}@${e.position}${e.hasValue ? '' : ' (empty)'}`).join(', ')
 			);
+			console.log('Card front config:', await describeSlotIds(plugin, front));
+			console.log('Card back config: ', await describeSlotIds(plugin, back));
 
-			if (current.length < 2) {
-				console.warn('[RowOrderProbe] Fewer than two values on this row — nothing to reorder.');
+			// Only slots on the same side, both non-empty, are observable. A slot
+			// on the front is suppressed on the back, so front wins.
+			const eligibleOn = (side: string[]) =>
+				current.filter((e) => e.hasValue && side.includes(e.slotId));
+			const frontEligible = eligibleOn(front);
+			const backEligible = eligibleOn(back).filter((e) => !front.includes(e.slotId));
+
+			const [side, pair] =
+				frontEligible.length >= 2
+					? ['front', frontEligible.slice(0, 2)]
+					: backEligible.length >= 2
+						? ['back', backEligible.slice(0, 2)]
+						: ['none', []];
+
+			if (pair.length < 2) {
+				console.warn(
+					'[RowOrderProbe] Need two non-empty slots configured on the SAME side of the card. ' +
+					`Front eligible: ${frontEligible.length}, back eligible: ${backEligible.length}.`
+				);
 				console.groupEnd();
-				await plugin.app.toast('This row has fewer than two property values.');
+				await plugin.app.toast(
+					'Need two non-empty extras on the same side of the card — see console.'
+				);
 				return;
 			}
 
-			const desired = [...current].sort(
-				(a, b) => (columnIndex.get(a.slotId) ?? 0) - (columnIndex.get(b.slotId) ?? 0)
+			const [a, b] = pair;
+			console.log(
+				`Swapping on the ${side}: "${a.slotName}"@${a.position} <-> "${b.slotName}"@${b.position}`
 			);
-			if (desired.every((e, i) => e.valueRemId === current[i].valueRemId)) {
-				console.log('Row already matches column order — nothing to do.');
-				console.groupEnd();
-				await plugin.app.toast('This row already matches the column order.');
-				return;
-			}
+			console.log(
+				`  Card currently renders "${a.slotName}" before "${b.slotName}" on the ${side}.`
+			);
+			console.log(
+				`  If the row's value order drives rendering, it should flip to "${b.slotName}" then "${a.slotName}".`
+			);
 
-			console.log('Desired value order:', desired.map((e) => e.slotName).join(', '));
+			const swapped = current.map((e) =>
+				e.valueRemId === a.valueRemId ? b : e.valueRemId === b.valueRemId ? a : e
+			);
 
 			const confirmed = window.confirm(
-				`Reorder the property values of this row?\n\n"${rowName}"\n${row._id}\n\n` +
+				`Swap two rendered extras on this row?\n\n"${rowName}"\n${row._id}\n\n` +
+				`Side: ${side} of card\n` +
+				`Swap: "${a.slotName}" <-> "${b.slotName}"\n\n` +
 				`from: ${current.map((e) => e.slotName).join(', ')}\n` +
-				`to:   ${desired.map((e) => e.slotName).join(', ')}\n\n` +
+				`to:   ${swapped.map((e) => e.slotName).join(', ')}\n\n` +
 				`This moves rems that RemNote maintains itself. BACK UP FIRST.\n` +
 				`Undo with "PROBE: Restore Row Value Order".\n\nProceed?`
 			);
@@ -166,25 +210,28 @@ async function onActivate(plugin: ReactRNPlugin) {
 			} as RowOrderBackup);
 
 			try {
-				await applyValueOrder(plugin, row, desired.map((e) => e.valueRemId));
+				await applyValueOrder(plugin, row, swapped.map((e) => e.valueRemId));
 			} catch (e) {
-				console.error('[RowOrderProbe] Reorder FAILED — backup kept:', e);
+				console.error('[RowOrderProbe] Swap FAILED — backup kept:', e);
 				console.groupEnd();
-				await plugin.app.toast('Reorder failed — backup kept, see console.');
+				await plugin.app.toast('Swap failed — backup kept, see console.');
 				return;
 			}
 
 			const after = await getRowValueOrder(row, columns);
-			const ok = after.every((e, i) => e.valueRemId === desired[i]?.valueRemId);
+			const ok = after.every((e, i) => e.valueRemId === swapped[i]?.valueRemId);
 			console.log('Value order now:', after.map((e) => `${e.slotName}@${e.position}`).join(', '));
-			console.log(ok ? '✓ Reorder took effect in the data.' : '✗ Data did not end up in the requested order.');
-			console.log('Now open a card for this row and check whether the extras follow the new order.');
+			console.log(ok ? '✓ Swap took effect in the data.' : '✗ Data did not end up swapped.');
+			console.log(
+				`Now open a card for this row. Expect the ${side} to read ` +
+				`"${b.slotName}" then "${a.slotName}".`
+			);
 			console.groupEnd();
 
 			await plugin.app.toast(
 				ok
-					? 'Row values reordered. Check a card for this row, then run "PROBE: Restore Row Value Order".'
-					: 'Reorder did not read back as requested — see console.'
+					? `Swapped ${a.slotName} <-> ${b.slotName} on the ${side}. Check a card, then run "PROBE: Restore Row Value Order".`
+					: 'Swap did not read back as requested — see console.'
 			);
 		},
 	});
@@ -229,6 +276,195 @@ async function onActivate(plugin: ReactRNPlugin) {
 			if (ok) await plugin.storage.setLocal(ROW_ORDER_BACKUP_KEY, undefined);
 			await plugin.app.toast(
 				ok ? `Restored "${backup.rowName}".` : 'Restore mismatch — backup kept, see console.'
+			);
+		},
+	});
+
+	// --- Bulk: sync every row to column order ----------------------------
+	// Card extras render in each ROW's property-value order (verified by swapping
+	// two rendered extras on one row and watching the card flip). Column order
+	// only governs rows created afterwards, so making existing cards match the
+	// table means rewriting every row's value order.
+	//
+	// Always dry-runs first and reports what it would change before asking.
+	await plugin.app.registerCommand({
+		id: 'sync-rows-to-column-order',
+		name: 'Sync All Rows To Column Order',
+		description:
+			'Reorders every row\'s property values to match the table\'s column order, so card extras render in column order. Dry-runs first; reversible.',
+		quickCode: 'sro',
+		action: async () => {
+			const focused = await plugin.focus.getFocusedRem();
+			if (!focused) {
+				await plugin.app.toast('Focus the tag rem (or any row of its table) first.');
+				return;
+			}
+
+			const pending = await plugin.storage.getLocal<BulkOrderBackup>(BULK_ORDER_BACKUP_KEY);
+			if (pending) {
+				await plugin.app.toast(
+					`A previous sync of "${pending.tagName}" (${pending.rows.length} rows) is not restored yet. ` +
+					`Run "Undo Row Order Sync" first, or accept it to discard the undo.`
+				);
+				console.warn('[RowOrderSync] Pending backup blocks a new sync:', pending);
+				return;
+			}
+
+			const { tag } = await resolveTagRem(plugin, focused);
+			const tagName = slotRichTextToString(tag.text) || '[unnamed]';
+			console.group(`[RowOrderSync] Tag "${tagName}" (${tag._id})`);
+
+			const columns = await getColumnSlots(tag);
+			const columnIndex = new Map(columns.map((c, i) => [c._id, i]));
+			console.log('Column order:', columns.map((c) => slotRichTextToString(c.text)).join(', '));
+
+			const rows = await tag.taggedRem();
+			console.log(`Scanning ${rows.length} rows…`);
+
+			// Dry run: work out which rows differ before touching anything.
+			const plans: { row: typeof rows[number]; name: string; from: string[]; toIds: string[] }[] = [];
+			for (let i = 0; i < rows.length; i++) {
+				const row = rows[i];
+				const current = await getRowValueOrder(row, columns);
+				if (current.length < 2) continue;
+				const desired = [...current].sort(
+					(a, b) => (columnIndex.get(a.slotId) ?? 0) - (columnIndex.get(b.slotId) ?? 0)
+				);
+				if (desired.every((e, j) => e.valueRemId === current[j].valueRemId)) continue;
+				plans.push({
+					row,
+					name: slotRichTextToString(row.text) || '[unnamed]',
+					from: current.map((e) => e.slotName),
+					toIds: desired.map((e) => e.valueRemId),
+				});
+				if ((i + 1) % 100 === 0) console.log(`  …scanned ${i + 1}/${rows.length}`);
+			}
+
+			console.log(`DRY RUN: ${plans.length} of ${rows.length} rows would change.`);
+			plans.slice(0, 10).forEach((p) => {
+				console.log(`  "${p.name.slice(0, 60)}"`);
+				console.log(`     from: ${p.from.join(', ')}`);
+			});
+			if (plans.length > 10) console.log(`  …and ${plans.length - 10} more.`);
+
+			if (plans.length === 0) {
+				console.log('Nothing to do — every row already matches the column order.');
+				console.groupEnd();
+				await plugin.app.toast('All rows already match the column order.');
+				return;
+			}
+
+			const confirmed = window.confirm(
+				`Sync row property order to column order?\n\n` +
+				`Tag: "${tagName}"\n` +
+				`Rows to change: ${plans.length} of ${rows.length}\n` +
+				`Target order: ${columns.map((c) => slotRichTextToString(c.text)).join(', ')}\n\n` +
+				`This moves property-value rems that RemNote maintains itself, on every ` +
+				`affected row. BACK UP YOUR KNOWLEDGE BASE FIRST.\n\n` +
+				`Undo with "Undo Row Order Sync".\n\nProceed?`
+			);
+			if (!confirmed) {
+				console.log('Cancelled by user — nothing was written.');
+				console.groupEnd();
+				await plugin.app.toast('Cancelled — nothing was written.');
+				return;
+			}
+
+			// Snapshot before the first write so an interrupted run is still undoable.
+			const backup: BulkOrderBackup = {
+				tagId: tag._id,
+				tagName,
+				rows: [],
+				timestamp: Date.now(),
+			};
+			for (const p of plans) {
+				const current = await getRowValueOrder(p.row, columns);
+				backup.rows.push({ rowId: p.row._id, originalOrder: current.map((e) => e.valueRemId) });
+			}
+			await plugin.storage.setLocal(BULK_ORDER_BACKUP_KEY, backup);
+			console.log(`Snapshot stored for ${backup.rows.length} rows.`);
+
+			let done = 0;
+			let failed = 0;
+			for (const p of plans) {
+				try {
+					await applyValueOrder(plugin, p.row, p.toIds);
+					done++;
+				} catch (e) {
+					failed++;
+					console.error(`[RowOrderSync] Row ${p.row._id} failed:`, e);
+				}
+				if ((done + failed) % 25 === 0) {
+					console.log(`  …applied ${done + failed}/${plans.length}`);
+				}
+			}
+
+			console.log(`Done. ${done} rows reordered, ${failed} failed.`);
+			console.log('Backup kept — run "Undo Row Order Sync" to revert, or ignore it to accept.');
+			console.groupEnd();
+
+			await plugin.app.toast(
+				failed === 0
+					? `Reordered ${done} rows. Check your cards; "Undo Row Order Sync" reverts.`
+					: `Reordered ${done} rows, ${failed} failed — see console.`
+			);
+		},
+	});
+
+	await plugin.app.registerCommand({
+		id: 'undo-row-order-sync',
+		name: 'Undo Row Order Sync',
+		description: 'Restores every row changed by the last "Sync All Rows To Column Order".',
+		quickCode: 'sru',
+		action: async () => {
+			const backup = await plugin.storage.getLocal<BulkOrderBackup>(BULK_ORDER_BACKUP_KEY);
+			if (!backup) {
+				await plugin.app.toast('No row order sync to undo.');
+				return;
+			}
+
+			const confirmed = window.confirm(
+				`Undo the row order sync?\n\n` +
+				`Tag: "${backup.tagName}"\n` +
+				`Rows to restore: ${backup.rows.length}\n` +
+				`Synced: ${new Date(backup.timestamp).toLocaleString()}\n\nProceed?`
+			);
+			if (!confirmed) return;
+
+			console.group(`[RowOrderSync] Undoing "${backup.tagName}" — ${backup.rows.length} rows`);
+			let done = 0;
+			let failed = 0;
+			for (const entry of backup.rows) {
+				const row = await plugin.rem.findOne(entry.rowId);
+				if (!row) {
+					failed++;
+					console.warn(`Row ${entry.rowId} no longer exists — skipped.`);
+					continue;
+				}
+				try {
+					await applyValueOrder(plugin, row, entry.originalOrder);
+					done++;
+				} catch (e) {
+					failed++;
+					console.error(`Row ${entry.rowId} restore failed:`, e);
+				}
+				if ((done + failed) % 25 === 0) {
+					console.log(`  …restored ${done + failed}/${backup.rows.length}`);
+				}
+			}
+			console.log(`Done. ${done} restored, ${failed} failed.`);
+			if (failed === 0) {
+				await plugin.storage.setLocal(BULK_ORDER_BACKUP_KEY, undefined);
+				console.log('Backup cleared.');
+			} else {
+				console.warn('Backup KEPT because some rows failed.');
+			}
+			console.groupEnd();
+
+			await plugin.app.toast(
+				failed === 0
+					? `Restored ${done} rows.`
+					: `Restored ${done} rows, ${failed} failed — backup kept, see console.`
 			);
 		},
 	});

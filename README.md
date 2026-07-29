@@ -28,16 +28,48 @@ This plugin rebuilds that picker.
    - **Column: `<name>`** — a slot column that generates its own cards; equivalent to its native menu.
 4. Click a `+ Name` button to add a property to a side, `✕` to remove it. Changes save immediately; **Revert to opened state** undoes the session.
 
-### Two rules the renderer enforces
+### Rules the renderer enforces
 
-- **Order is not configurable.** Extras always render in table column order; the order they are stored in is ignored. The numbering in the widget reflects the order the card will actually use.
 - **A property on the front is skipped on the back.** Adding it to one side therefore removes it from the other, which is why RemNote's own chip lists are always disjoint.
+- **Blank cells are omitted entirely.** A property configured as an extra simply doesn't appear on rows where it has no value.
+- **The order you pick here is ignored** — see below.
 
 ### Where the data lives
 
 The config is the built-in `Slot` powerup (code `y`), slots `ExtraSlotsOnFrontOfCard` (`f`) and `ExtraSlotsOnBackOfCard` (`b`), holding rich text made of rem references to the slot rems to render. The primary card's copy lives on the **tag rem**; a card-generating column's copy lives on that **slot rem**.
 
 > ⚠️ `isProperty()` is backed by that same `Slot` powerup, so writing any `y.*` property to a rem **promotes it into a column of its parent**. If a row ever gets promoted this way, it starts appearing as a table column. This plugin only ever writes to the tag rem or to real column slots, and its column lists exclude rems tagged with the tag (i.e. rows).
+
+## The order card extras appear in
+
+This is the least obvious part of the feature, so it's worth stating exactly.
+
+Card extras render in the order of **that row's own property-value rems** — the order in which the row's cells were first filled in. Not the order stored in the config, and not the table's current column order.
+
+Two things follow:
+
+- **Column order governs only rows created later.** A new row's values are created as you fill its cells, so they land in the current column order. Dragging a column changes the header immediately but leaves every existing row untouched.
+- **Existing rows must each be reordered.** Their value order was frozen when they were created and nothing in the UI revisits it.
+
+So making a whole table consistent takes both levers: drag the columns into the order you want (fixing future rows), then run **"Sync All Rows To Column Order"** (fixing existing ones).
+
+### Sync All Rows To Column Order
+
+1. Focus the tag rem, or any row of its table.
+2. Run **"Sync All Rows To Column Order"** (quick code: `sro`).
+3. It scans every row and **dry-runs first**, reporting to the console how many rows would change and naming the first ten. Nothing is written until you confirm.
+4. Confirm to apply. Undo with **"Undo Row Order Sync"** (`sru`), which restores every row it changed.
+
+> ⚠️ This moves property-value rems that RemNote maintains itself, across every affected row. **Back up your knowledge base first.** The snapshot is written before the first change, so an interrupted run is still undoable, but it lives in plugin storage — not a substitute for an export.
+
+### How this was established
+
+Each claim above was tested rather than inferred, because the plausible-looking explanations were wrong twice:
+
+- Writing two slots to the config in reverse order still rendered them the other way round → the config array's order is ignored.
+- Dragging a column changed the table header but not the rendered card, and the row's value positions still held the old order → column order is not the render order.
+- Swapping two non-empty extras configured on the same side of one row flipped that card → the row's value order is causal, not merely correlated.
+- The swap survived a quit, reopen and sync → the change is durable, not a live-session artifact.
 
 ## Inspect Slot Config
 
