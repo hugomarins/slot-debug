@@ -183,6 +183,65 @@ export async function applyValueOrder(
   }
 }
 
+/**
+ * Absolute position of each column slot among ALL of the tag's children.
+ *
+ * Table columns are not children 0..n of the tag — they are interleaved with
+ * every row, so a tag with 6 columns and 525 rows has column positions spread
+ * anywhere in 0..530. Any code that moves a column must use these absolute
+ * indices, never the column's index within the filtered column list.
+ */
+export async function getColumnPositions(
+  columns: Rem[]
+): Promise<{ id: string; name: string; position: number | null }[]> {
+  return Promise.all(
+    columns.map(async (c) => ({
+      id: c._id,
+      name: richTextToString(c.text) || '[unnamed]',
+      position: (await c.positionAmongstSiblings().catch(() => null)) ?? null,
+    }))
+  );
+}
+
+/**
+ * Swap the sibling positions of two rems under `parent`.
+ *
+ * Order of operations matters. With positions pLow < pHigh, moving the higher
+ * rem to pLow first shifts everything between them up by one, leaving the lower
+ * rem where pHigh then addresses it correctly. Doing it the other way round
+ * off-by-ones.
+ *
+ * Returns the positions actually observed before and after so callers can verify
+ * rather than assume — `setParent`'s insert semantics are not documented.
+ */
+export async function swapSiblingPositions(
+  plugin: RNPlugin,
+  parent: Rem,
+  idA: string,
+  idB: string
+): Promise<{ before: Record<string, number | null>; after: Record<string, number | null> }> {
+  const a = await plugin.rem.findOne(idA);
+  const b = await plugin.rem.findOne(idB);
+  if (!a || !b) throw new Error('One of the rems to swap was not found');
+
+  const pA = await a.positionAmongstSiblings();
+  const pB = await b.positionAmongstSiblings();
+  if (pA === undefined || pB === undefined) {
+    throw new Error('Could not read sibling positions');
+  }
+  const before = { [idA]: pA, [idB]: pB };
+
+  const [low, high, pLow, pHigh] = pA < pB ? [a, b, pA, pB] : [b, a, pB, pA];
+  await high.setParent(parent, pLow);
+  await low.setParent(parent, pHigh);
+
+  const after = {
+    [idA]: (await a.positionAmongstSiblings().catch(() => null)) ?? null,
+    [idB]: (await b.positionAmongstSiblings().catch(() => null)) ?? null,
+  };
+  return { before, after };
+}
+
 export const BULK_ORDER_BACKUP_KEY = 'bulkRowOrderBackup';
 
 export interface BulkOrderBackup {
@@ -190,7 +249,64 @@ export interface BulkOrderBackup {
   tagName: string;
   /** Only rows that were actually changed, with their pre-change order. */
   rows: { rowId: string; originalOrder: string[] }[];
+  /** Column order before the sync, when columns were reordered too. */
+  originalColumnOrder?: string[];
   timestamp: number;
+}
+
+/**
+ * Reorder a tag's column slots into `desiredIds` order.
+ *
+ * Implemented as a series of pairwise swaps through `swapSiblingPositions`
+ * (selection sort, at most n-1 swaps). That keeps the set of absolute positions
+ * the columns occupy unchanged — only which column sits at each is altered — so
+ * columns never migrate into the middle of the rows, and every write goes
+ * through the one primitive that has been verified against the app.
+ *
+ * Ids absent from `desiredIds` keep their place; ids not currently columns are
+ * ignored.
+ */
+export async function applyColumnOrder(
+  plugin: RNPlugin,
+  tag: Rem,
+  desiredIds: string[]
+): Promise<{ swaps: number; finalOrder: string[]; matched: boolean }> {
+  const current = (await getColumnSlots(tag)).map((c) => c._id);
+  const target = planColumnOrder(current, desiredIds);
+  const working = [...current];
+  let swaps = 0;
+  for (let i = 0; i < target.length; i++) {
+    if (working[i] === target[i]) continue;
+    const j = working.indexOf(target[i]);
+    if (j < 0) continue;
+    await swapSiblingPositions(plugin, tag, working[i], working[j]);
+    [working[i], working[j]] = [working[j], working[i]];
+    swaps++;
+  }
+
+  const finalOrder = (await getColumnSlots(tag)).map((c) => c._id);
+  return {
+    swaps,
+    finalOrder,
+    matched: finalOrder.join() === target.join(),
+  };
+}
+
+/**
+ * The column order that results from applying `desiredIds`, without writing.
+ * Mirrors `applyColumnOrder`'s permutation rule so callers can preview it.
+ */
+export function planColumnOrder(currentIds: string[], desiredIds: string[]): string[] {
+  const target = [...currentIds];
+  const listed = desiredIds.filter((id) => currentIds.includes(id));
+  const slotsHeld = currentIds
+    .map((id, i) => ({ id, i }))
+    .filter((x) => listed.includes(x.id))
+    .map((x) => x.i);
+  listed.forEach((id, k) => {
+    target[slotsHeld[k]] = id;
+  });
+  return target;
 }
 
 export interface RowSyncPlan {

@@ -14,6 +14,8 @@ import {
   getColumnSlots,
   planRowSync,
   applyRowSync,
+  planColumnOrder,
+  applyColumnOrder,
   BULK_ORDER_BACKUP_KEY,
   BulkOrderBackup,
   richTextToString,
@@ -119,7 +121,10 @@ function CardSlotConfig() {
   const [opened, setOpened] = useState<{ front: string[]; back: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [alsoColumns, setAlsoColumns] = useState(true);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  /** Rows whose value order disagrees with the stored order. null = checking. */
+  const [outOfSyncRows, setOutOfSyncRows] = useState<number | null>(null);
 
   useEffect(() => {
     if (setup && targetId === null) setTargetId(setup.targets[0].id);
@@ -143,6 +148,33 @@ function CardSlotConfig() {
       cancelled = true;
     };
   }, [targetId]);
+
+  // The stored config order persists across sessions, so it cannot serve as the
+  // baseline for "has anything changed" — an order the user set with the arrows
+  // but never applied would look already-applied on reopening. The real baseline
+  // is the rows, so measure them against the stored order whenever a target is
+  // (re)loaded.
+  useEffect(() => {
+    if (!setup || loadedFor !== targetId) return;
+    let cancelled = false;
+    (async () => {
+      setOutOfSyncRows(null);
+      try {
+        const tag = await plugin.rem.findOne(setup.tagId);
+        if (!tag || cancelled) return;
+        const columns = await getColumnSlots(tag);
+        const target = planColumnOrder(columns.map((c) => c._id), [...front, ...back]);
+        const { plans } = await planRowSync(tag, columns, target);
+        if (!cancelled) setOutOfSyncRows(plans.length);
+      } catch (e) {
+        console.error('[CardSlotConfig] Could not check row order:', e);
+        if (!cancelled) setOutOfSyncRows(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [setup, targetId, loadedFor]);
 
   const apply = async (nextFront: string[], nextBack: string[]) => {
     if (!targetId) return;
@@ -199,6 +231,26 @@ function CardSlotConfig() {
     else apply(front, current);
   };
 
+  // Applying rewrites every row, so it stays disabled until the arrows have
+  // actually changed an order. Adding or removing an extra does not need it —
+  // a newly added extra slots into the row order that already exists — so this
+  // compares only the relative order of the slots common to both states, which
+  // also re-disables the button if the user undoes a move by hand.
+  const orderChanged = (() => {
+    if (!opened) return false;
+    const reordered = (now: string[], then: string[]) => {
+      const a = now.filter((id) => then.includes(id));
+      const b = then.filter((id) => now.includes(id));
+      return a.join() !== b.join();
+    };
+    return reordered(front, opened.front) || reordered(back, opened.back);
+  })();
+
+  // Enabled either because the arrows moved something in this session, or
+  // because the rows still do not match the stored order from a previous one.
+  const checkingRows = outOfSyncRows === null;
+  const canApply = !busy && !syncing && !checkingRows && (orderChanged || outOfSyncRows > 0);
+
   const applyOrderToCards = async () => {
     if (!setup) return;
     setSyncing('Scanning rows…');
@@ -206,25 +258,46 @@ function CardSlotConfig() {
       const tag = await plugin.rem.findOne(setup.tagId);
       if (!tag) throw new Error('Tag rem not found');
 
+      // Only one undo snapshot is kept, so proceeding overwrites any earlier
+      // one — making that earlier reordering permanent. Say so explicitly rather
+      // than refusing, since refusing left no way forward.
       const pending = await plugin.storage.getLocal<BulkOrderBackup>(BULK_ORDER_BACKUP_KEY);
+      const pendingWarning = pending
+        ? `⚠️ THIS MAKES AN EARLIER REORDERING PERMANENT\n\n` +
+          `A previous reordering has not been undone:\n` +
+          `  Table: "${pending.tagName}"\n` +
+          `  Rows changed: ${pending.rows.length}\n` +
+          (pending.originalColumnOrder ? `  Table columns: also reordered\n` : '') +
+          `  When: ${new Date(pending.timestamp).toLocaleString()}\n\n` +
+          `Only one undo is stored. Proceeding replaces it, so that earlier ` +
+          `reordering can no longer be reverted with "Undo Row Order Sync". ` +
+          `Its details have been logged to the console.\n\n` +
+          `${'─'.repeat(40)}\n\n`
+        : '';
+
       if (pending) {
-        setSyncing(null);
-        await plugin.app.toast(
-          `A previous sync of "${pending.tagName}" (${pending.rows.length} rows) is not undone yet. ` +
-          `Run "Undo Row Order Sync" first, or accept it.`
+        console.warn(
+          '[CardSlotConfig] Proceeding will discard the undo for this earlier sync:',
+          pending
         );
-        return;
       }
 
       // Front and back are disjoint sets over the same columns, and only the
-      // order *within* a side is observable, so concatenating them yields a
-      // single row sequence that satisfies both. Unlisted columns sort after.
-      const targetSlotIds = [...front, ...back];
+      // order *within* a side is observable, so concatenating them gives one
+      // sequence satisfying both. Unlisted columns keep their existing slots.
       const columns = await getColumnSlots(tag);
-      const { plans, totalRows } = await planRowSync(tag, columns, targetSlotIds);
+      const currentColumnIds = columns.map((c) => c._id);
+      const targetColumnIds = planColumnOrder(currentColumnIds, [...front, ...back]);
+
+      // Rows are synced to the resulting COLUMN order, not just to the listed
+      // extras, so rows and columns agree and unlisted columns stay put.
+      const { plans, totalRows } = await planRowSync(tag, columns, targetColumnIds);
+      const columnsWouldMove = targetColumnIds.join() !== currentColumnIds.join();
 
       console.group('[CardSlotConfig] Apply order to cards');
-      console.log('Target order:', targetSlotIds.map(nameOf).join(', '));
+      console.log('Current column order:', currentColumnIds.map(nameOf).join(', '));
+      console.log('Target order:        ', targetColumnIds.map(nameOf).join(', '));
+      console.log(`Columns would move: ${columnsWouldMove ? 'yes' : 'no'}`);
       console.log(`${plans.length} of ${totalRows} rows would change.`);
       plans.slice(0, 10).forEach((p) =>
         console.log(`  "${p.name.slice(0, 60)}" from: ${p.from.join(', ')}`)
@@ -232,22 +305,26 @@ function CardSlotConfig() {
       if (plans.length > 10) console.log(`  …and ${plans.length - 10} more.`);
       console.groupEnd();
 
-      if (plans.length === 0) {
+      const willMoveColumns = alsoColumns && columnsWouldMove;
+      if (plans.length === 0 && !willMoveColumns) {
         setSyncing(null);
         await plugin.app.toast('Every row already renders in this order.');
         return;
       }
 
       const confirmed = window.confirm(
+        pendingWarning +
         `Apply this order to cards?\n\n` +
-        `Order: ${targetSlotIds.map(nameOf).join(', ')}\n` +
-        `Rows to rewrite: ${plans.length} of ${totalRows}\n\n` +
+        `Order: ${targetColumnIds.map(nameOf).join(', ')}\n` +
+        `Rows to rewrite: ${plans.length} of ${totalRows}\n` +
+        (willMoveColumns
+          ? `Table columns: WILL BE REORDERED to match.\n\n`
+          : `Table columns: left alone — rows created later will follow the ` +
+            `current column order instead.\n\n`) +
         `Cards render extras in each ROW's value order, so this rewrites the ` +
         `property-value rems of every affected row — rems RemNote maintains itself.\n\n` +
         `NOTE: that order is shared by every card a row generates, so cards from ` +
         `other columns of this table are affected too.\n\n` +
-        `This does NOT reorder the table's columns, so rows you create later will ` +
-        `still follow the current column order — drag the columns to match.\n\n` +
         `BACK UP YOUR KNOWLEDGE BASE FIRST. Undo with "Undo Row Order Sync".\n\nProceed?`
       );
       if (!confirmed) {
@@ -256,21 +333,42 @@ function CardSlotConfig() {
         return;
       }
 
+      // Snapshot before the first write, including the column order when we are
+      // about to change it, so the undo command can put both back.
       await plugin.storage.setLocal(BULK_ORDER_BACKUP_KEY, {
         tagId: tag._id,
         tagName: setup.tagName,
         rows: plans.map((p) => ({ rowId: p.rowId, originalOrder: p.originalOrder })),
+        originalColumnOrder: willMoveColumns ? currentColumnIds : undefined,
         timestamp: Date.now(),
       } as BulkOrderBackup);
+
+      if (willMoveColumns) {
+        setSyncing('Reordering columns…');
+        const result = await applyColumnOrder(plugin, tag, targetColumnIds);
+        console.log(
+          `[CardSlotConfig] Column reorder: ${result.swaps} swap(s), ` +
+          (result.matched ? 'order matches target.' : 'ORDER DID NOT MATCH TARGET.')
+        );
+        if (!result.matched) {
+          console.warn('Final column order:', result.finalOrder.map(nameOf).join(', '));
+        }
+      }
 
       const { done, failed } = await applyRowSync(plugin, plans, (completed, total) => {
         setSyncing(`Rewriting rows… ${completed}/${total}`);
       });
 
       setSyncing(null);
+      // This order is now the applied one, so the button greys out until the
+      // arrows are used again.
+      if (failed === 0) {
+        setOpened({ front, back });
+        setOutOfSyncRows(0);
+      }
       await plugin.app.toast(
         failed === 0
-          ? `Reordered ${done} rows. "Undo Row Order Sync" reverts.`
+          ? `Reordered ${done} rows${willMoveColumns ? ' and the columns' : ''}. "Undo Row Order Sync" reverts.`
           : `Reordered ${done} rows, ${failed} failed — see console.`
       );
     } catch (e) {
@@ -471,30 +569,66 @@ function CardSlotConfig() {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button
-            disabled={busy || !!syncing || front.length + back.length < 2}
+            disabled={!canApply}
             onClick={applyOrderToCards}
+            title={
+              canApply
+                ? 'Counts the affected rows and asks before writing'
+                : checkingRows
+                  ? 'Checking how many rows match this order…'
+                  : 'Use the ↑ / ↓ arrows to change an order first'
+            }
             style={{
               ...btn,
-              backgroundColor: '#7c3aed',
-              color: 'white',
-              border: 'none',
-              opacity: busy || !!syncing || front.length + back.length < 2 ? 0.5 : 1,
+              backgroundColor: canApply ? '#7c3aed' : 'var(--rn-clr-background-secondary)',
+              color: canApply ? 'white' : 'var(--rn-clr-content-tertiary)',
+              border: canApply ? 'none' : '1px solid var(--rn-clr-background-tertiary)',
+              cursor: canApply ? 'pointer' : 'default',
+              opacity: busy || !!syncing ? 0.5 : 1,
             }}
           >
             {syncing ? syncing : 'Apply order to cards'}
           </button>
           <span style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)' }}>
-            Counts the rows first and asks before writing.
+            {checkingRows
+              ? 'Checking which rows match this order…'
+              : orderChanged
+                ? 'Counts the rows first and asks before writing.'
+                : outOfSyncRows > 0
+                  ? `${outOfSyncRows} row${outOfSyncRows === 1 ? '' : 's'} do not use this order yet.`
+                  : 'Every row already uses this order. Use the ↑ / ↓ arrows to change it.'}
           </span>
         </div>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+            marginTop: 8,
+            fontSize: 11,
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={alsoColumns}
+            disabled={busy || !!syncing}
+            onChange={(e) => setAlsoColumns(e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            Also reorder the <strong>table columns</strong> to match, so rows you create
+            later inherit this order. Changes your table layout.
+          </span>
+        </label>
+
         <div
           style={{ fontSize: 11, color: 'var(--rn-clr-content-tertiary)', marginTop: 8, lineHeight: 1.5 }}
         >
           Rewrites every affected row so its cards render in the order above. The order is
           shared by <strong>all</strong> cards a row generates, not just the target selected
-          here. Rows created later follow the table's <strong>column</strong> order instead,
-          so drag the columns to match if you want new rows to agree. Undo with the{' '}
-          <em>Undo Row Order Sync</em> command.
+          here. Undo with the <em>Undo Row Order Sync</em> command.
         </div>
       </div>
 
