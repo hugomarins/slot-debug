@@ -2,10 +2,38 @@
 
 A surgical tool for the flashcards and slots (properties) of RemNote tags and tables. It does two things:
 
-1. **Restores the "extra properties on front/back of card" picker** that RemNote removed from the primary column of a table — the reason cloze tables can no longer be configured at all.
+1. **Restores the "extra properties on front/back of card" picker** that RemNote removed from the primary column of a table — the reason cloze tables can no longer be configured at all — and adds control over the order those extras appear in.
 2. **Inspects and repairs tag slots** — finding ghost slots whose deletion failed (but which keep generating flashcards) and force-deleting them along with their property-value child rems.
 
 ![./image/debugger-widget.png](https://raw.githubusercontent.com/hugomarins/slot-debug/refs/heads/main/image/debugger-widget.png)
+
+---
+
+## Plugin Commands Reference
+
+| Command | Quick code | Opens / does | Writes? |
+| --- | --- | --- | --- |
+| **Configure Card Extras** | `cce` | Opens the *Card Extras Configurator*. Choose which properties show on the front/back of a table's cards, and set the order they render in. | Yes — config immediately; rows/columns only via **Apply order to cards** |
+| **Inspect Slot Config (Cards)** | `isc` | Opens the *Slot Inspector*. Dumps the `Slot` powerup card config for a rem and its columns, plus a row's property-value order. | No — read-only |
+| **Sync All Rows To Column Order** | `sro` | Reorders every row's property values to match the table's current column order, so card extras render in column order. Dry-runs and reports counts before asking. | Yes — reversible |
+| **Undo Row Order Sync** | `sru` | Restores every row (and the column order, if it was changed) from the last sync's snapshot. | Yes |
+| **Debug Tag Slots** | `dts` | Opens the *Tag Slot Debugger*. Lists a tag's slots with reference counts, flags orphaned rems, and offers Force Delete. | Only on explicit Force Delete — **irreversible** |
+| **Inspect Rem (Diagnostic)** | `inr` | Logs full diagnostics for the focused rem (type, powerups, tags, children) to the browser console. | No — read-only |
+
+All commands act on the **focused rem**. `cce`, `isc`, `sro` and `sru` resolve the tag automatically: focus the tag rem itself, any row of its table, or one of its slot rems.
+
+## Plugin Widgets Reference
+
+All four are popups, opened by the commands above rather than mounted in the sidebar.
+
+| Widget | Opened by | What it shows |
+| --- | --- | --- |
+| **Card Extras Configurator** (`card_slot_config`) | `cce` | Target selector (primary card, or a card-generating column), the front and back extra lists with add/remove/reorder, and **Apply order to cards** with a row count. |
+| **Slot Inspector** (`slot_inspector`) | `isc` | Per-rem dump: rem ID, `isProperty`/`isSlot`/`propertyType`, every built-in powerup present, and the raw plus resolved values of all three `Slot` powerup slots. For a row, also its property-value order next to the tag's column order. **Dump JSON to console** exports the whole tree. |
+| **Tag Slot Debugger** (`tag_debug`) | `dts` | Tag name and ID, how many rems carry the tag, every slot (including template-supplied ones) with reference counts, an orphaned-rem warning, and Force Delete per slot. |
+| **Orphaned Rems Inspector** (`orphaned_rems`) | The Tag Slot Debugger's warning box | A table of blank-front debris rems with instance name, rem ID and back text, plus bulk delete. |
+
+---
 
 ## Configure Card Extras
 
@@ -13,7 +41,7 @@ A surgical tool for the flashcards and slots (properties) of RemNote tags and ta
 
 RemNote lets a table column show other properties as extra context on the front or back of the cards it generates, via **Configure Cards → Extra properties to show on front/back of card**.
 
-That menu is reachable only from the column that renders the row's `backText` (labelled "Definition"), because the config it edits belongs to the **primary card** — the row's front → back, *and any cloze cards made from the row's own text*.
+That menu is reachable only from the definition-type column that surfaces the row's `backText` (labelled "Definition"), because the config it edits belongs to the **primary card** — the row's front → back, *and any cloze cards made from the row's own text*.
 
 A cloze table has no such column. So when RemNote removed the menu from the primary/Name column, cloze tables lost the entry point entirely — while the stored values stayed live and kept rendering on the cards. You can see the extras on your cloze cards but have no way to change them.
 
@@ -22,23 +50,27 @@ This plugin rebuilds that picker.
 ### Usage
 
 1. Focus the tag rem, or any row of the table, or one of its slot rems.
-2. Run **"Configure Card Extras"** (quick code: `cce`).
+2. Run **Configure Card Extras** (`cce`).
 3. Pick what to configure:
    - **Primary card (row front → back, and clozes)** — the target RemNote no longer exposes.
    - **Column: `<name>`** — a slot column that generates its own cards; equivalent to its native menu.
 4. Click a `+ Name` button to add a property to a side, `✕` to remove it. Changes save immediately; **Revert to opened state** undoes the session.
+5. To change the *order*, use the `↑` / `↓` arrows and then **Apply order to cards** — see below.
 
 ### Rules the renderer enforces
 
 - **A property on the front is skipped on the back.** Adding it to one side therefore removes it from the other, which is why RemNote's own chip lists are always disjoint.
-- **Blank cells are omitted entirely.** A property configured as an extra simply doesn't appear on rows where it has no value.
-- **The order you pick here is ignored** — see below.
+- **Blank cells are omitted entirely.** A property configured as an extra doesn't appear on rows where it has no value.
+- **Definition-type columns are never offered.** Such a column is a real slot rem, but it holds no value of its own — it surfaces the row's `backText`, i.e. it *is* the primary card's back. It can neither be shown as an extra nor take part in ordering. RemNote's own picker omits it too.
+- **The order you pick is not stored anywhere the renderer reads** — see the next section.
 
 ### Where the data lives
 
 The config is the built-in `Slot` powerup (code `y`), slots `ExtraSlotsOnFrontOfCard` (`f`) and `ExtraSlotsOnBackOfCard` (`b`), holding rich text made of rem references to the slot rems to render. The primary card's copy lives on the **tag rem**; a card-generating column's copy lives on that **slot rem**.
 
 > ⚠️ `isProperty()` is backed by that same `Slot` powerup, so writing any `y.*` property to a rem **promotes it into a column of its parent**. If a row ever gets promoted this way, it starts appearing as a table column. This plugin only ever writes to the tag rem or to real column slots, and its column lists exclude rems tagged with the tag (i.e. rows).
+
+---
 
 ## The order card extras appear in
 
@@ -49,18 +81,29 @@ Card extras render in the order of **that row's own property-value rems** — th
 Two things follow:
 
 - **Column order governs only rows created later.** A new row's values are created as you fill its cells, so they land in the current column order. Dragging a column changes the header immediately but leaves every existing row untouched.
-- **Existing rows must each be reordered.** Their value order was frozen when they were created and nothing in the UI revisits it.
+- **Existing rows must each be reordered.** Their value order was frozen when they were created, and nothing in the UI revisits it.
 
-So making a whole table consistent takes both levers: drag the columns into the order you want (fixing future rows), then run **"Sync All Rows To Column Order"** (fixing existing ones).
+So making a whole table consistent takes both levers: set the column order (fixing future rows) *and* rewrite the existing rows.
 
-### Sync All Rows To Column Order
+### Apply order to cards (in the widget)
 
-1. Focus the tag rem, or any row of its table.
-2. Run **"Sync All Rows To Column Order"** (quick code: `sro`).
-3. It scans every row and **dry-runs first**, reporting to the console how many rows would change and naming the first ten. Nothing is written until you confirm.
-4. Confirm to apply. Undo with **"Undo Row Order Sync"** (`sru`), which restores every row it changed.
+The `↑` / `↓` arrows are **staged** — they change the list and nothing else, so a single arrow press can never trigger a bulk rewrite. **Apply order to cards** does the work:
 
-> ⚠️ This moves property-value rems that RemNote maintains itself, across every affected row. **Back up your knowledge base first.** The snapshot is written before the first change, so an interrupted run is still undoable, but it lives in plugin storage — not a substitute for an export.
+1. It counts the affected rows first and shows them in the confirmation.
+2. The **"Also reorder the table columns to match"** checkbox (on by default) additionally puts the columns in the same order, so rows you create later inherit it.
+3. Confirm to apply. Undo with **Undo Row Order Sync** (`sru`).
+
+The button stays greyed until there is something to do. It enables when either the arrows moved something in this session, or the rows still disagree with a stored order from a previous one — the check is measured against the rows themselves on every open, not against the saved config, which persists and would otherwise look already-applied.
+
+> Note: the order is a property of the **row**, so it is shared by every card that row generates — not only the target selected in the widget.
+
+### Sync All Rows To Column Order (command)
+
+`sro` is the column-order-driven counterpart: it takes the table's **current** column order as the target and rewrites every row to match. Use it when you have already arranged the columns the way you want by dragging them. Same protections — dry run, counts, confirmation, and `sru` to undo.
+
+### Only one undo is stored
+
+Both entry points keep a single snapshot. If a previous reordering has not been undone, the confirmation opens with an explicit warning naming that earlier reordering — table, row count, whether columns were moved, and when — and states that proceeding makes it permanent. Confirming accepts the old change and starts a fresh undo; cancelling leaves everything untouched so you can still run `sru`. The full snapshot is logged to the console before being replaced.
 
 ### How this was established
 
@@ -70,10 +113,10 @@ Each claim above was tested rather than inferred, because the plausible-looking 
 - Dragging a column changed the table header but not the rendered card, and the row's value positions still held the old order → column order is not the render order.
 - Swapping two non-empty extras configured on the same side of one row flipped that card → the row's value order is causal, not merely correlated.
 - The swap survived a quit, reopen and sync → the change is durable, not a live-session artifact.
+- A newly created row filled its cells in the current column order → column order does govern future rows.
+- Columns turned out to sit at child positions 428–433 of 533, interleaved among the rows → column moves must use absolute sibling indices, never the column's index in the column list.
 
-## Inspect Slot Config
-
-Run **"Inspect Slot Config (Cards)"** (quick code: `isc`) on any rem to dump, for it and each of its column slots: rem ID, `isProperty`/`isSlot`/`propertyType`, every built-in powerup present, and the raw plus resolved values of all three `Slot` powerup slots. Rems with a card config are highlighted. **Dump JSON to console** exports the whole tree.
+---
 
 ## Ghost slots and orphaned rems
 
@@ -96,7 +139,7 @@ This plugin handles both problems.
 #### Step 1 — Inspect and Force Delete ghost slots
 
 1. In the RemNote editor, click on (focus into) the tag rem you want to debug (e.g. "English Words").
-2. Open the command palette and run **"Debug Tag Slots"** (quick code: `dts`).
+2. Open the command palette and run **Debug Tag Slots** (`dts`).
 3. A popup appears showing:
    - The tag rem's name and ID
    - How many rems are tagged with this tag
@@ -121,15 +164,27 @@ If it does:
 
 #### Step 3 — Diagnostic (advanced)
 
-If you need to identify how RemNote classifies a particular rem internally (powerups, tag memberships, type), focus on the rem and run **"Inspect Rem (Diagnostic)"** (quick code: `inr`). Full details are logged to the browser console (F12 → Console).
+If you need to identify how RemNote classifies a particular rem internally (powerups, tag memberships, type), focus on the rem and run **Inspect Rem (Diagnostic)** (`inr`). Full details are logged to the browser console (F12 → Console).
+
+---
 
 ## ⚠️ Warnings
 
-- **Back up your knowledge base before using any delete operation.** Go to RemNote Settings → Export to create a full backup.
+- **Back up your knowledge base before any write operation.** Go to RemNote Settings → Export to create a full backup. This applies to Force Delete, orphaned rem deletion, **and** the row/column reordering — the latter moves rems that RemNote maintains itself.
 - Force Delete and orphaned rem deletion are **irreversible**. They permanently remove rems and their associated data.
 - Only delete slots you are certain are ghost/spurious. Deleting an active slot will erase all data stored in it across every tagged rem.
 - Review the orphaned rems table before confirming deletion — verify that the back text shown matches the debris you expect to remove.
+- Row and column reordering is reversible via **Undo Row Order Sync**, but only for the **most recent** operation, and the snapshot lives in plugin storage — not a substitute for an export.
 - **Disable this plugin when not in use** to prevent accidental triggering of destructive commands.
+
+## How things work
+
+### How card extras are read and written
+
+1. The config is rich text of rem references in the `Slot` powerup (`y`), slots `ExtraSlotsOnFrontOfCard` / `ExtraSlotsOnBackOfCard`.
+2. The SDK resolves built-in powerup slots via `PowerupSlotCodeMap[powerupCode][slot]`, so these calls must pass the slot **name**, not the one-letter code stored in the knowledge base.
+3. Render order comes from the row's property-value children, so changing it means moving those rems with `setParent(row, index)`.
+4. Column order is changed by swapping slot rems' **absolute** sibling positions, via a series of pairwise swaps. This keeps the set of positions the columns occupy unchanged, so columns can never migrate into the middle of the rows.
 
 ### How Force Delete works
 
