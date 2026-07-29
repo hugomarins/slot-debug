@@ -7,10 +7,10 @@
 	"enableOnMobile": true,
 	"version": {
 		"major": 0,
-		"minor": 1,
-		"patch": 1
+		"minor": 2,
+		"patch": 0
 	},
-	"description": "Inspect slots/properties of tag rem / tables and force-delete ghost slots and their spurios flashcards.",
+	"description": "Restore the removed 'extra properties on front/back of card' picker for table cards — including cloze tables, where RemNote dropped the UI. Also inspects tag slots and force-deletes ghost slots and their spurious flashcards.",
 	"requestNative": false,
 	"requiredScopes": [
 		{

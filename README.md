@@ -1,16 +1,57 @@
 # Slot Debug
 
-A surgical debug tool for RemNote tag slots/properties. Use it to inspect the slots of a tag rem, identify ghost slots whose deletion failed (but which keep generating flashcards), and force-delete them along with all their property-value child rems in tagged rems.
+A surgical tool for RemNote tag slots/properties. It does two things:
+
+1. **Restores the "extra properties on front/back of card" picker** that RemNote removed from the primary column of a table — the reason cloze tables can no longer be configured at all.
+2. **Inspects and repairs tag slots** — finding ghost slots whose deletion failed (but which keep generating flashcards) and force-deleting them along with their property-value child rems.
 
 ![./image/debugger-widget.png](https://raw.githubusercontent.com/hugomarins/slot-debug/refs/heads/main/image/debugger-widget.png)
 
-## The problem it solves
+## Configure Card Extras
 
-### Ghost slots generating phantom flashcards
+### The problem it solves
+
+RemNote lets a table column show other properties as extra context on the front or back of the cards it generates, via **Configure Cards → Extra properties to show on front/back of card**.
+
+That menu is reachable only from the column that renders the row's `backText` (labelled "Definition"), because the config it edits belongs to the **primary card** — the row's front → back, *and any cloze cards made from the row's own text*.
+
+A cloze table has no such column. So when RemNote removed the menu from the primary/Name column, cloze tables lost the entry point entirely — while the stored values stayed live and kept rendering on the cards. You can see the extras on your cloze cards but have no way to change them.
+
+This plugin rebuilds that picker.
+
+### Usage
+
+1. Focus the tag rem, or any row of the table, or one of its slot rems.
+2. Run **"Configure Card Extras"** (quick code: `cce`).
+3. Pick what to configure:
+   - **Primary card (row front → back, and clozes)** — the target RemNote no longer exposes.
+   - **Column: `<name>`** — a slot column that generates its own cards; equivalent to its native menu.
+4. Click a `+ Name` button to add a property to a side, `✕` to remove it. Changes save immediately; **Revert to opened state** undoes the session.
+
+### Two rules the renderer enforces
+
+- **Order is not configurable.** Extras always render in table column order; the order they are stored in is ignored. The numbering in the widget reflects the order the card will actually use.
+- **A property on the front is skipped on the back.** Adding it to one side therefore removes it from the other, which is why RemNote's own chip lists are always disjoint.
+
+### Where the data lives
+
+The config is the built-in `Slot` powerup (code `y`), slots `ExtraSlotsOnFrontOfCard` (`f`) and `ExtraSlotsOnBackOfCard` (`b`), holding rich text made of rem references to the slot rems to render. The primary card's copy lives on the **tag rem**; a card-generating column's copy lives on that **slot rem**.
+
+> ⚠️ `isProperty()` is backed by that same `Slot` powerup, so writing any `y.*` property to a rem **promotes it into a column of its parent**. If a row ever gets promoted this way, it starts appearing as a table column. This plugin only ever writes to the tag rem or to real column slots, and its column lists exclude rems tagged with the tag (i.e. rows).
+
+## Inspect Slot Config
+
+Run **"Inspect Slot Config (Cards)"** (quick code: `isc`) on any rem to dump, for it and each of its column slots: rem ID, `isProperty`/`isSlot`/`propertyType`, every built-in powerup present, and the raw plus resolved values of all three `Slot` powerup slots. Rems with a card config are highlighted. **Dump JSON to console** exports the whole tree.
+
+## Ghost slots and orphaned rems
+
+### The problem it solves
+
+#### Ghost slots generating phantom flashcards
 
 When you delete a slot (property) from a RemNote tag via the UI, the deletion sometimes fails silently. The slot rem may still exist in the database, and rems tagged with that tag continue to have spurious "Deleted Bullet" child rems linked to it — causing phantom flashcards to be generated in your queue.
 
-### Orphaned rems after reference cleanup
+#### Orphaned rems after reference cleanup
 
 Even after a ghost slot is successfully force-deleted, a second class of debris can remain. If you used RemNote's built-in "delete references to deleted rem" option, the forward references in those child rems are cleared — but the rem itself is not removed. You are left with rems that have a **blank front** and a non-empty back (the original property value), which still generate flashcards with no question.
 
@@ -18,9 +59,9 @@ Even after a ghost slot is successfully force-deleted, a second class of debris 
 
 This plugin handles both problems.
 
-## Usage
+### Usage
 
-### Step 1 — Inspect and Force Delete ghost slots
+#### Step 1 — Inspect and Force Delete ghost slots
 
 1. In the RemNote editor, click on (focus into) the tag rem you want to debug (e.g. "English Words").
 2. Open the command palette and run **"Debug Tag Slots"** (quick code: `dts`).
@@ -32,7 +73,7 @@ This plugin handles both problems.
 4. Identify the ghost slot.
 5. Click **Force Delete** next to it. Read the warning carefully, then confirm.
 
-### Step 2 — Clean up orphaned rems (blank-front debris)
+#### Step 2 — Clean up orphaned rems (blank-front debris)
 
 After force-deleting a ghost slot (or after using RemNote's global reference cleanup), check whether the Tag Slot Debugger shows an amber warning box below the instance count:
 
@@ -46,7 +87,7 @@ If it does:
 
 > **Note on the filter:** a rem is flagged as orphaned only if its front is completely empty (no text, no references, no links) **and** its back is non-empty. Rems whose front contains a slot reference (such as Priority or Source from other powerups) are excluded, even if that reference resolves to empty-looking text.
 
-### Step 3 — Diagnostic (advanced)
+#### Step 3 — Diagnostic (advanced)
 
 If you need to identify how RemNote classifies a particular rem internally (powerups, tag memberships, type), focus on the rem and run **"Inspect Rem (Diagnostic)"** (quick code: `inr`). Full details are logged to the browser console (F12 → Console).
 
@@ -58,14 +99,14 @@ If you need to identify how RemNote classifies a particular rem internally (powe
 - Review the orphaned rems table before confirming deletion — verify that the back text shown matches the debris you expect to remove.
 - **Disable this plugin when not in use** to prevent accidental triggering of destructive commands.
 
-## How Force Delete works
+### How Force Delete works
 
 1. Fetches all rems tagged with the focused tag rem.
 2. For each tagged rem, retrieves the property-value rem linked to the target slot (via `getTagPropertyAsRem`).
 3. Deletes each found property-value rem.
 4. Deletes the slot rem itself.
 
-## How orphaned rem detection works
+### How orphaned rem detection works
 
 1. Fetches all rems tagged with the tag.
 2. For each tagged rem, inspects its direct children.
