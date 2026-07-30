@@ -8,7 +8,7 @@
 	"version": {
 		"major": 0,
 		"minor": 2,
-		"patch": 1
+		"patch": 2
 	},
 	"description": "Restore 'extra properties on front/back of card' picker for cloze table cards (Name column), where RemNote dropped the UI; inspects tag slots and force-deletes ghost slots and their spurious cards.",
 	"requestNative": false,

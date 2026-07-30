@@ -405,7 +405,13 @@ function CardSlotConfig() {
   }
 
   const renderSide = (side: 'front' | 'back', selected: string[], title: string) => {
-    const unselected = setup.candidates.filter((c) => !selected.includes(c.id));
+    // The column being configured is the card itself, so it cannot also be one
+    // of its own extras. It is only dropped from the "+ add" chips, never hidden
+    // from the selected list — an existing config containing it must stay
+    // visible so it can be removed.
+    const unselected = setup.candidates.filter(
+      (c) => !selected.includes(c.id) && c.id !== targetId
+    );
     return (
       <div style={{ marginBottom: 18 }}>
         <div style={label}>{title}</div>
@@ -434,7 +440,7 @@ function CardSlotConfig() {
                   marginBottom: 4,
                   borderRadius: 4,
                   backgroundColor: 'var(--rn-clr-background-secondary)',
-                  border: '1px solid #2563eb',
+                  border: `1px solid ${id === targetId ? '#b45309' : '#2563eb'}`,
                 }}
               >
                 <span
@@ -442,7 +448,17 @@ function CardSlotConfig() {
                 >
                   {i + 1}.
                 </span>
-                <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{nameOf(id)}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>
+                  {nameOf(id)}
+                  {id === targetId && (
+                    <span
+                      style={{ fontSize: 11, fontWeight: 500, color: '#b45309', marginLeft: 8 }}
+                      title="This column is the card being configured, so it cannot also be one of its own extras."
+                    >
+                      ⚠️ this is the card itself — remove it
+                    </span>
+                  )}
+                </span>
                 <button
                   disabled={busy || !!syncing || i === 0}
                   onClick={() => move(side, id, -1)}

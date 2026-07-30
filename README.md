@@ -62,6 +62,7 @@ This plugin rebuilds that picker.
 - **A property on the front is skipped on the back.** Adding it to one side therefore removes it from the other, which is why RemNote's own chip lists are always disjoint.
 - **Blank cells are omitted entirely.** A property configured as an extra doesn't appear on rows where it has no value.
 - **Definition-type columns are never offered.** Such a column is a real slot rem, but it holds no value of its own — it surfaces the row's `backText`, i.e. it *is* the primary card's back. It can neither be shown as an extra nor take part in ordering. RemNote's own picker omits it too.
+- **A column is never offered as an extra on its own card.** When configuring `Column: X`, `X` is the card being tested, so it cannot also be extra content on it. If an existing config already contains it, it stays listed and flagged so you can remove it.
 - **The order you pick is not stored anywhere the renderer reads** — see the next section.
 
 ### Where the data lives

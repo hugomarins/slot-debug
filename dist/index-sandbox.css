@@ -502,6 +502,9 @@ video {
   --tw-contain-paint:  ;
   --tw-contain-style:  ;
 }
+.visible {
+  visibility: visible;
+}
 .collapse {
   visibility: collapse;
 }
