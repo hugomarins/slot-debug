@@ -88,11 +88,13 @@ So making a whole table consistent takes both levers: set the column order (fixi
 
 ### Apply order to cards (in the widget)
 
-The `↑` / `↓` arrows are **staged** — they change the list and nothing else, so a single arrow press can never trigger a bulk rewrite. **Apply order to cards** does the work:
+The `↑` / `↓` arrows are **staged**: pressing one saves the new order into the tag's stored config (like the `+`/`✕` chips, that write is immediate) but touches no row and no card, so a single arrow press can never trigger a bulk rewrite. **Apply order to cards** does the work:
 
-1. It counts the affected rows first and shows them in the confirmation.
+1. It counts the affected rows first and shows them in a confirmation panel **inside the widget**. Nothing is written while that panel is open.
 2. The **"Also reorder the table columns to match"** checkbox (on by default) additionally puts the columns in the same order, so rows you create later inherit it.
-3. Confirm to apply. Undo with **Undo Row Order Sync** (`sru`).
+3. Press the orange button in the panel to apply, or **Cancel**. Undo with **Undo Row Order Sync** (`sru`).
+
+Editing the list again while the panel is open discards it — the counts it shows always describe the list as displayed.
 
 The button stays greyed until there is something to do. It enables when either the arrows moved something in this session, or the rows still disagree with a stored order from a previous one — the check is measured against the rows themselves on every open, not against the saved config, which persists and would otherwise look already-applied.
 
@@ -100,11 +102,13 @@ The button stays greyed until there is something to do. It enables when either t
 
 ### Sync All Rows To Column Order (command)
 
-`sro` is the column-order-driven counterpart: it takes the table's **current** column order as the target and rewrites every row to match. Use it when you have already arranged the columns the way you want by dragging them. Same protections — dry run, counts, confirmation, and `sru` to undo.
+`sro` is the column-order-driven counterpart: it takes the table's **current** column order as the target and rewrites every row to match. Use it when you have already arranged the columns the way you want by dragging them. Same protections — dry run, counts, confirmation, and `sru` to undo. Both `sro` and `sru` open a popup to do this; the command itself only launches it.
+
+> **Why confirmations are drawn in the widget.** RemNote runs plugins in a sandboxed iframe where `window.confirm` never opens a dialog *and returns a truthy value anyway*. Every guard built on it therefore approved itself and the write ran unannounced (fixed in 0.2.4). Nothing in this plugin uses `window.confirm`; every destructive step is confirmed by a panel rendered by the plugin's own UI.
 
 ### Only one undo is stored
 
-Both entry points keep a single snapshot. If a previous reordering has not been undone, the confirmation opens with an explicit warning naming that earlier reordering — table, row count, whether columns were moved, and when — and states that proceeding makes it permanent. Confirming accepts the old change and starts a fresh undo; cancelling leaves everything untouched so you can still run `sru`. The full snapshot is logged to the console before being replaced.
+Both entry points keep a single snapshot. If a previous reordering has not been undone, the confirmation panel opens with an explicit warning naming that earlier reordering — table, row count, whether columns were moved, and when — and states that proceeding makes it permanent. Confirming accepts the old change and starts a fresh undo; cancelling leaves everything untouched so you can still run `sru`. The full snapshot is logged to the console before being replaced.
 
 ### How this was established
 
@@ -147,7 +151,7 @@ This plugin handles both problems.
    - All slots/properties, including those from attached templates, with each slot's name, ID, source, and reference count
    - An orphaned rems warning (if any exist — see Step 2)
 4. Identify the ghost slot.
-5. Click **Force Delete** next to it. Read the warning carefully, then confirm.
+5. Click **Force Delete** next to it. A red confirmation panel opens under the button — read it, then press **Delete it** (or **Cancel**).
 
 #### Step 2 — Clean up orphaned rems (blank-front debris)
 
@@ -159,7 +163,7 @@ If it does:
 
 1. Click **"Show N Orphaned Rem(s) →"** to open the Orphaned Rems inspector.
 2. Review the table: each row shows the instance name (e.g. "denigrate", "restive"), the rem ID, and the back text. Confirm these are debris and not intentional rems.
-3. Click **"Delete All N Orphaned Rem(s)"**, read the warning, and confirm.
+3. Click **"Delete All N Orphaned Rem(s)"**, read the red confirmation panel that opens above the table, then press **Delete N rem(s)** (or **Cancel**).
 
 > **Note on the filter:** a rem is flagged as orphaned only if its front is completely empty (no text, no references, no links) **and** its back is non-empty. Rems whose front contains a slot reference (such as Priority or Source from other powerups) are excluded, even if that reference resolves to empty-looking text.
 

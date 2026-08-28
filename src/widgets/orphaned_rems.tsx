@@ -39,6 +39,13 @@ function OrphanedRems() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const [deletedCount, setDeletedCount] = useState<number | null>(null);
+  /**
+   * True once the user has asked to delete and before they have confirmed.
+   * `window.confirm` cannot be used: inside RemNote's sandboxed plugin iframe it
+   * shows no dialog and returns a truthy value, so a guard built on it deletes
+   * without ever asking.
+   */
+  const [confirming, setConfirming] = useState(false);
 
   const ctx = useRunAsync(
     async () => plugin.widget.getWidgetContext<WidgetLocation.Popup>(),
@@ -92,20 +99,10 @@ function OrphanedRems() {
     return all;
   }, [remId, refreshKey]);
 
+  /** Only ever called from the confirmation panel below. */
   const handleDeleteAll = async () => {
     if (!orphans || orphans.length === 0) return;
-    const confirmed = window.confirm(
-      `⚠️ DANGER — Delete Orphaned Rems\n\n` +
-      `This will permanently delete ${orphans.length} orphaned rem(s)\n` +
-      `across ${new Set(orphans.map(o => o.instanceId)).size} instance(s).\n\n` +
-      `Criteria: empty front + non-empty back.\n\n` +
-      `MAKE A BACKUP FIRST. This is IRREVERSIBLE.\n\nProceed?`
-    );
-    if (!confirmed) {
-      console.log('[OrphanedRems] Deletion cancelled by user.');
-      return;
-    }
-
+    setConfirming(false);
     console.log(`[OrphanedRems] Starting deletion of ${orphans.length} orphaned rems…`);
     setDeleting(true);
     let count = 0;
@@ -174,7 +171,7 @@ function OrphanedRems() {
         ) : (
           <button
             disabled={deleting || orphans.length === 0}
-            onClick={handleDeleteAll}
+            onClick={() => setConfirming(true)}
             style={{
               padding: '4px 14px',
               backgroundColor: orphans.length === 0 ? '#374151' : '#dc2626',
@@ -191,6 +188,60 @@ function OrphanedRems() {
           </button>
         )}
       </div>
+
+      {confirming && (
+        <div
+          style={{
+            border: '2px solid #dc2626',
+            borderRadius: 4,
+            padding: 10,
+            marginBottom: 12,
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 4 }}>
+            ⚠️ DANGER — delete {orphans.length} orphaned rem(s)?
+          </div>
+          <div style={{ marginBottom: 6 }}>
+            Across {new Set(orphans.map((o) => o.instanceId)).size} instance(s), matching
+            "empty front + non-empty back" — the rows listed below.{' '}
+            <strong>Make a backup first. This is IRREVERSIBLE.</strong>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={handleDeleteAll}
+              style={{
+                padding: '4px 12px',
+                backgroundColor: '#dc2626',
+                color: 'white',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Delete {orphans.length} rem(s)
+            </button>
+            <button
+              onClick={() => setConfirming(false)}
+              style={{
+                padding: '4px 12px',
+                backgroundColor: 'transparent',
+                color: 'var(--rn-clr-content-primary)',
+                border: '1px solid var(--rn-clr-background-tertiary)',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Table */}
       {orphans.length === 0 ? (

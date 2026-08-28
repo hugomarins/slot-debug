@@ -57,6 +57,12 @@ function TagDebug() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleted, setDeleted] = useState<Record<string, number>>({});
+  /**
+   * Slot awaiting an in-widget confirmation. `window.confirm` cannot be used:
+   * inside RemNote's sandboxed plugin iframe it shows no dialog and returns a
+   * truthy value, so a guard built on it deletes without ever asking.
+   */
+  const [confirmSlot, setConfirmSlot] = useState<string | null>(null);
 
   const ctx = useRunAsync(
     async () => plugin.widget.getWidgetContext<WidgetLocation.Popup>(),
@@ -134,21 +140,9 @@ function TagDebug() {
     return { name, id: remId, taggedCount: taggedRems.length, slots, nonPropertyChildCount, emptyFrontInstanceCount, emptyFrontRemIds };
   }, [remId, refreshKey]);
 
+  /** Only ever called from the confirmation panel below. */
   const handleForceDelete = async (slot: SlotInfo) => {
-    const confirmed = window.confirm(
-      `⚠️ DANGER — Force Delete Slot\n\n` +
-      `Slot: "${slot.name}"\n` +
-      `ID: ${slot.id}\n\n` +
-      `This will:\n` +
-      `  1. Remove the slot rem itself\n` +
-      `  2. Remove its property-value rem from every tagged rem\n\n` +
-      `MAKE A BACKUP FIRST. This is IRREVERSIBLE.\n\nProceed?`
-    );
-    if (!confirmed) {
-      console.log(`[TagDebug] Force delete cancelled by user for slot "${slot.name}" (${slot.id})`);
-      return;
-    }
-
+    setConfirmSlot(null);
     console.log(`[TagDebug] Force delete started for slot "${slot.name}" (${slot.id})`);
     setDeleting(slot.id);
     try {
@@ -316,7 +310,7 @@ function TagDebug() {
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <button
                 disabled={!!deleting || deleted[slot.id] !== undefined}
-                onClick={() => handleForceDelete(slot)}
+                onClick={() => setConfirmSlot(slot.id)}
                 style={{
                   padding: '3px 10px',
                   backgroundColor: deleted[slot.id] !== undefined ? '#374151' : '#dc2626',
@@ -357,6 +351,60 @@ function TagDebug() {
                 Open Property Rem
               </button>
             </div>
+
+            {confirmSlot === slot.id && (
+              <div
+                style={{
+                  border: '2px solid #dc2626',
+                  borderRadius: 4,
+                  padding: 8,
+                  marginTop: 8,
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 4 }}>
+                  ⚠️ DANGER — force delete "{slot.name}"?
+                </div>
+                <div style={{ marginBottom: 6 }}>
+                  This removes the slot rem itself and its property-value rem from every
+                  tagged rem (~{slot.refsCount} of them).{' '}
+                  <strong>Make a backup first. This is IRREVERSIBLE.</strong>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    onClick={() => handleForceDelete(slot)}
+                    style={{
+                      padding: '3px 10px',
+                      backgroundColor: '#dc2626',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Delete it
+                  </button>
+                  <button
+                    onClick={() => setConfirmSlot(null)}
+                    style={{
+                      padding: '3px 10px',
+                      backgroundColor: 'transparent',
+                      color: 'var(--rn-clr-content-primary)',
+                      border: '1px solid var(--rn-clr-background-tertiary)',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ))
       )}
