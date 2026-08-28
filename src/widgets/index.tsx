@@ -55,7 +55,7 @@ async function onActivate(plugin: ReactRNPlugin) {
 
 	await plugin.app.registerCommand({
 		id: 'configure-card-extras',
-		name: 'Configure Card Extras',
+		name: 'Configure Table Card Extras',
 		description:
 			'Choose which properties show on the front/back of a table\'s cards — including the primary/cloze card, whose menu RemNote removed.',
 		quickCode: 'cce',

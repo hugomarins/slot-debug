@@ -13,7 +13,7 @@ A surgical tool for the flashcards and slots (properties) of RemNote tags and ta
 
 | Command | Quick code | Opens / does | Writes? |
 | --- | --- | --- | --- |
-| **Configure Card Extras** | `cce` | Opens the *Card Extras Configurator*. Choose which properties show on the front/back of a table's cards, and set the order they render in. | Yes — config immediately; rows/columns only via **Apply order to cards** |
+| **Configure Table Card Extras** | `cce` | Opens the *Card Extras Configurator*. Choose which properties show on the front/back of a table's cards, and set the order they render in. | Yes — config immediately; rows/columns only via **Apply order to cards** |
 | **Inspect Slot Config (Cards)** | `isc` | Opens the *Slot Inspector*. Dumps the `Slot` powerup card config for a rem and its columns, plus a row's property-value order. | No — read-only |
 | **Sync All Rows To Column Order** | `sro` | Reorders every row's property values to match the table's current column order, so card extras render in column order. Dry-runs and reports counts before asking. | Yes — reversible |
 | **Undo Row Order Sync** | `sru` | Restores every row (and the column order, if it was changed) from the last sync's snapshot. | Yes |
