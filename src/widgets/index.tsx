@@ -99,6 +99,45 @@ async function onActivate(plugin: ReactRNPlugin) {
 		},
 	});
 
+	// --- Bulk tags & powerups on a rem's references -----------------------
+	// A table cell holds a reference to its slot rem inside its own text (that is
+	// how `getRowValueOrder` finds cells), so a slot's reference list and its
+	// column are the same rems. Scanning references therefore covers the table
+	// case without any table code — and works on any rem, not just slots. The
+	// table-resolved scopes are kept alongside it because they are exact for
+	// tables regardless of how references behave.
+	plugin.app.registerWidget('bulk_tag_manager', WidgetLocation.Popup, {
+		dimensions: { width: '560px', height: 'auto' },
+	});
+
+	await plugin.app.registerCommand({
+		id: 'bulk-tags-powerups',
+		name: 'Bulk Tags & Powerups',
+		description:
+			"Inventory the tags and powerups carried by everything referencing the focused rem (or by a table's cells), then add or remove one across the whole set.",
+		quickCode: 'btp',
+		action: async () => {
+			const rem = await plugin.focus.getFocusedRem();
+			if (!rem) {
+				await plugin.app.toast('Focus a rem first — a slot, a tag, or any rem at all.');
+				return;
+			}
+			// The scan, the confirmation and the writes all live in the popup:
+			// `window.confirm` is inert in the sandboxed plugin iframe.
+			await plugin.widget.openPopup('bulk_tag_manager', { op: 'manage', remId: rem._id });
+		},
+	});
+
+	await plugin.app.registerCommand({
+		id: 'undo-bulk-tag-change',
+		name: 'Undo Bulk Tag Change',
+		description: 'Reverses the last "Bulk Tags & Powerups" add or remove, restoring captured powerup values.',
+		quickCode: 'btu',
+		action: async () => {
+			await plugin.widget.openPopup('bulk_tag_manager', { op: 'undo' });
+		},
+	});
+
 	await plugin.app.registerCommand({
 		id: 'debug-tag-slots',
 		name: 'Debug Tag Slots',
